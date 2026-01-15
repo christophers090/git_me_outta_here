@@ -44,7 +44,7 @@ usage() {
   echo ""
   echo -e "${BOLD}Examples:${NC}"
   echo "  prs                # List all outstanding PRs"
-  echo "  prs yaml           # Show chain containing 'yaml' topic"
+  echo "  prs yaml           # Detailed status for 'yaml' PR (same as -s)"
   echo "  prs this           # Show PRs for current worktree"
   echo "  prs -s yaml        # Detailed status for 'yaml' PR"
   echo "  prs -d yaml        # Show diff for 'yaml' PR"
@@ -206,6 +206,11 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+# If topic provided without explicit mode flag, default to status mode
+if [[ "$MODE" == "outstanding" && -n "$TOPIC" ]]; then
+  MODE="status"
+fi
 
 # Source and run mode
 source "$SCRIPT_DIR/prs.d/mode_${MODE}.sh"
