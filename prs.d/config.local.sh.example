@@ -1,0 +1,7 @@
+# Local configuration - copy to config.local.sh and customize
+# This file is gitignored
+
+export GITHUB_USER="your-github-username"
+export BRANCH_USER="your.name"
+export PRS_REPO="owner/repo"
+export PRS_CI_CHECK_CONTEXT="buildkite/your-pipeline"
