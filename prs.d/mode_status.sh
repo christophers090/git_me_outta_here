@@ -1,34 +1,22 @@
 # prs status mode - detailed PR status
 # shellcheck shell=bash
 
-run_status() {
+# Fields needed for status display
+_STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft"
+
+# Fetch PR JSON for a topic
+_fetch_status_json() {
     local topic="$1"
+    find_pr "$topic" "all" "$_STATUS_FIELDS"
+}
 
-    # No topic: list all open PRs
-    if [[ -z "$topic" ]]; then
-        echo -e "${BOLD}Your open PRs:${NC}"
-        gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-        return 0
-    fi
-
-    local pr_json
-    pr_json=$(find_pr "$topic" "all" "number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft")
+# Render status from PR JSON
+# Note: Does NOT fetch unresolved_count (that's a separate API call we skip for cached view)
+_render_status() {
+    local pr_json="$1"
+    local skip_comments="${2:-false}"
 
     if ! pr_exists "$pr_json"; then
-        echo -e "${RED}No PR found for topic:${NC} $topic"
-        echo ""
-        # Try to find similar topics
-        local similar
-        similar=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null \
-            | jq -r --arg topic "$topic" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
-
-        if [[ -n "$similar" ]]; then
-            echo -e "${YELLOW}Similar topics:${NC}"
-            echo "$similar"
-        else
-            echo -e "${BOLD}Your open PRs:${NC}"
-            gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-        fi
         return 1
     fi
 
@@ -117,6 +105,15 @@ run_status() {
     if [[ -n "$change_requesters" ]]; then
         echo -e "  Changes requested by: ${RED}${change_requesters}${NC}"
     fi
+
+    # Show unresolved comments (skip if rendering cached - will be added on fresh)
+    if [[ "$skip_comments" != "true" ]]; then
+        local unresolved_count
+        unresolved_count=$(get_unresolved_count "$number")
+        if [[ "$unresolved_count" -gt 0 ]]; then
+            echo -e "  Unresolved comments: ${YELLOW}${unresolved_count}${NC}"
+        fi
+    fi
     echo ""
 
     # Merge Status section
@@ -147,5 +144,94 @@ run_status() {
     has_mwr_label=$(echo "$pr" | jq -r '.labels[] | select(.name | ascii_downcase | contains("merge")) | .name' 2>/dev/null | head -1)
     if [[ -n "$has_mwr_label" ]]; then
         echo -e "  Label: ${CYAN}${has_mwr_label}${NC}"
+    fi
+}
+
+run_status() {
+    local topic="$1"
+
+    # No topic: list all open PRs (no caching needed)
+    if [[ -z "$topic" ]]; then
+        echo -e "${BOLD}Your open PRs:${NC}"
+        gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+        return 0
+    fi
+
+    local cache_key="status_${topic}"
+    local cached_json fresh_json
+
+    cached_json=$(cache_get "$cache_key")
+
+    if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && is_interactive; then
+        # Have valid cache - show it immediately, then refresh
+        local cached_output fresh_output line_count
+
+        # Render cached (skip comments API call for speed)
+        cached_output=$(_render_status "$cached_json" "true")
+        line_count=$(echo "$cached_output" | wc -l)
+
+        # Print cached output + loading indicator
+        echo "$cached_output"
+        echo -e "${DIM}⟳ Refreshing...${NC}"
+
+        # Fetch fresh data
+        fresh_json=$(_fetch_status_json "$topic")
+
+        if pr_exists "$fresh_json"; then
+            cache_set "$cache_key" "$fresh_json"
+
+            # Render fresh (with comments)
+            fresh_output=$(_render_status "$fresh_json" "false")
+
+            # Move cursor up and clear
+            tput cuu $((line_count + 1)) 2>/dev/null || true
+            tput ed 2>/dev/null || true
+
+            # Print fresh output
+            echo "$fresh_output"
+
+            # Show status
+            if [[ "$cached_output" != "$fresh_output" ]]; then
+                echo -e "${DIM}↻ Updated${NC}"
+            else
+                echo -e "${DIM}✓ Up to date${NC}"
+            fi
+        else
+            # API failed or PR not found - just remove refreshing indicator
+            tput cuu 1 2>/dev/null || true
+            tput ed 2>/dev/null || true
+            echo -e "${DIM}✓ (cached)${NC}"
+        fi
+    else
+        # No cache or non-interactive - fetch with spinner
+        if is_interactive; then
+            show_spinner "Fetching PR..." &
+            local spinner_pid=$!
+            fresh_json=$(_fetch_status_json "$topic")
+            stop_spinner "$spinner_pid"
+        else
+            fresh_json=$(_fetch_status_json "$topic")
+        fi
+
+        if pr_exists "$fresh_json"; then
+            cache_set "$cache_key" "$fresh_json"
+            _render_status "$fresh_json" "false"
+        else
+            echo -e "${RED}No PR found for topic:${NC} $topic"
+            echo ""
+            # Try to find similar topics
+            local similar
+            similar=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null \
+                | jq -r --arg topic "$topic" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
+
+            if [[ -n "$similar" ]]; then
+                echo -e "${YELLOW}Similar topics:${NC}"
+                echo "$similar"
+            else
+                echo -e "${BOLD}Your open PRs:${NC}"
+                gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+            fi
+            return 1
+        fi
     fi
 }

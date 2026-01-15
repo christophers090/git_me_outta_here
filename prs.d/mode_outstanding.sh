@@ -1,38 +1,24 @@
 # prs outstanding mode - list all outstanding PRs with chain detection
 # shellcheck shell=bash
 
-run_outstanding() {
-    local filter_topic="$1"
-    local filter_topics=()
+# Fetch all open PRs JSON from GitHub API
+_fetch_outstanding_json() {
+    gh pr list -R "$REPO" --author "$GITHUB_USER" --state open \
+        --json number,title,url,body,headRefName,reviewDecision,statusCheckRollup 2>/dev/null || echo "[]"
+}
 
-    # Handle "this" - show PRs for current worktree's topics
-    if [[ "$filter_topic" == "this" ]]; then
-        if ! git rev-parse --git-dir &>/dev/null; then
-            echo -e "${RED}Not in a git repository${NC}"
-            return 1
-        fi
+# Render outstanding PRs from JSON
+# Args: $1=prs_json, $2=filter_topic (optional), $3=filter_topics_str (space-separated, optional)
+_render_outstanding() {
+    local prs_json="$1"
+    local filter_topic="${2:-}"
+    local filter_topics_str="${3:-}"
+    local -a filter_topics=()
 
-        mapfile -t filter_topics < <(get_branch_topics)
-
-        local current_branch
-        current_branch=$(git branch --show-current)
-        if [[ ${#filter_topics[@]} -eq 0 ]]; then
-            echo -e "${YELLOW}No revup topics found in current branch${NC}"
-            echo -e "Branch: ${CYAN}${current_branch}${NC}"
-            return 0
-        fi
-        echo -e "${DIM}Branch: ${current_branch}${NC}"
-        echo ""
-        filter_topic=""  # Clear so we use filter_topics array instead
+    # Convert filter_topics_str to array if provided
+    if [[ -n "$filter_topics_str" ]]; then
+        read -ra filter_topics <<< "$filter_topics_str"
     fi
-
-    # Fetch all open PRs
-    local prs_json
-    prs_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open \
-        --json number,title,url,body,headRefName,reviewDecision,statusCheckRollup 2>/dev/null || echo "[]")
-
-    # Update tab completion cache while we have the data
-    update_completion_cache "$prs_json"
 
     if [[ "$(echo "$prs_json" | jq 'length')" -eq 0 ]]; then
         echo "No open PRs found for $GITHUB_USER"
@@ -40,8 +26,6 @@ run_outstanding() {
     fi
 
     # Parse PRs into structured data
-    # ci_status: "pass" (all success), "fail" (any failure), "pending" (running/pending)
-    # Only check the configured CI context (not green-commits or other downstream pipelines)
     local parsed ci_context_pattern
     ci_context_pattern="${CI_CHECK_CONTEXT:-buildkite/}"
     parsed=$(echo "$prs_json" | jq -r --arg ci "$ci_context_pattern" '
@@ -97,32 +81,32 @@ run_outstanding() {
     done
 
     # Helper: Find root of chain containing topic
-    find_chain_root() {
+    _find_chain_root() {
         local topic="$1"
         local relative="${pr_relative[$topic]:-}"
         if [[ -z "$relative" || "$relative" == "main" || -z "${pr_data[$relative]:-}" ]]; then
             echo "$topic"
         else
-            find_chain_root "$relative"
+            _find_chain_root "$relative"
         fi
     }
 
     # Helper: Get chain order string (topic -> child -> grandchild)
-    get_chain_order() {
+    _get_chain_order() {
         local topic="$1"
         local result="$topic"
         local children="${pr_children[$topic]:-}"
         if [[ -n "$children" ]]; then
             local child_array=($children)
             for child in "${child_array[@]}"; do
-                result="$result -> $(get_chain_order "$child")"
+                result="$result -> $(_get_chain_order "$child")"
             done
         fi
         echo "$result"
     }
 
     # Helper: Print single PR
-    print_pr() {
+    _print_pr() {
         local topic="$1"
         local prefix="$2"
         local data="${pr_data[$topic]}"
@@ -148,23 +132,23 @@ run_outstanding() {
     }
 
     # Helper: Print chain recursively
-    print_chain() {
+    _print_chain() {
         local topic="$1"
         local prefix="$2"
 
-        print_pr "$topic" "$prefix"
+        _print_pr "$topic" "$prefix"
         echo ""
 
         local children="${pr_children[$topic]:-}"
         if [[ -n "$children" ]]; then
             local child_array=($children)
             for child in "${child_array[@]}"; do
-                print_chain "$child" "$prefix"
+                _print_chain "$child" "$prefix"
             done
         fi
     }
 
-    # If "this" mode with topics from current branch
+    # If filter_topics provided (from "this" mode)
     if [[ ${#filter_topics[@]} -gt 0 ]]; then
         echo -e "${BOLD}Topics in current branch:${NC} ${filter_topics[*]}"
         echo ""
@@ -173,16 +157,16 @@ run_outstanding() {
         for topic in "${filter_topics[@]}"; do
             if [[ -n "${pr_data[$topic]:-}" ]]; then
                 local root
-                root=$(find_chain_root "$topic")
+                root=$(_find_chain_root "$topic")
                 if [[ -z "${shown_roots[$root]:-}" ]]; then
                     shown_roots[$root]=1
                     local chain_order
-                    chain_order=$(get_chain_order "$root")
+                    chain_order=$(_get_chain_order "$root")
                     echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
                     echo -e "${DIM}${chain_order}${NC}"
                     echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
                     echo ""
-                    print_chain "$root" "  "
+                    _print_chain "$root" "  "
                     echo ""
                 fi
             else
@@ -205,32 +189,139 @@ run_outstanding() {
         fi
 
         local filter_root chain_order
-        filter_root=$(find_chain_root "$filter_topic")
-        chain_order=$(get_chain_order "$filter_root")
+        filter_root=$(_find_chain_root "$filter_topic")
+        chain_order=$(_get_chain_order "$filter_root")
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo -e "${DIM}${chain_order}${NC}"
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo ""
-        print_chain "$filter_root" "  "
+        _print_chain "$filter_root" "  "
         return 0
     fi
 
     # Print all chains
     for root in "${roots[@]}"; do
         local chain_order
-        chain_order=$(get_chain_order "$root")
+        chain_order=$(_get_chain_order "$root")
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo -e "${DIM}${chain_order}${NC}"
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo ""
-        print_chain "$root" "  "
+        _print_chain "$root" "  "
         echo ""
         echo ""
     done
 
     # Print standalone PRs (no chain)
     for topic in "${standalone[@]}"; do
-        print_pr "$topic" ""
+        _print_pr "$topic" ""
         echo ""
     done
+}
+
+run_outstanding() {
+    local filter_topic="$1"
+    local filter_topics=()
+    local filter_topics_str=""
+
+    # Handle "this" - show PRs for current worktree's topics
+    if [[ "$filter_topic" == "this" ]]; then
+        if ! git rev-parse --git-dir &>/dev/null; then
+            echo -e "${RED}Not in a git repository${NC}"
+            return 1
+        fi
+
+        mapfile -t filter_topics < <(get_branch_topics)
+
+        local current_branch
+        current_branch=$(git branch --show-current)
+        if [[ ${#filter_topics[@]} -eq 0 ]]; then
+            echo -e "${YELLOW}No revup topics found in current branch${NC}"
+            echo -e "Branch: ${CYAN}${current_branch}${NC}"
+            return 0
+        fi
+        echo -e "${DIM}Branch: ${current_branch}${NC}"
+        echo ""
+        filter_topic=""  # Clear so we use filter_topics array instead
+        filter_topics_str="${filter_topics[*]}"
+    fi
+
+    # Check cache
+    local cached_json fresh_json
+    local cache_key="outstanding"
+
+    cached_json=$(cache_get "$cache_key")
+
+    if [[ -n "$cached_json" ]] && is_interactive; then
+        # Have cache - show it immediately, then refresh in background
+        local cached_output fresh_output
+
+        cached_output=$(_render_outstanding "$cached_json" "$filter_topic" "$filter_topics_str")
+
+        # Save cursor position before printing cached output
+        tput sc 2>/dev/null || true
+
+        # Print cached output + loading indicator
+        echo "$cached_output"
+        echo -e "${DIM}⟳ Refreshing...${NC}"
+
+        # Fetch fresh data
+        fresh_json=$(_fetch_outstanding_json)
+
+        if [[ -n "$fresh_json" && "$fresh_json" != "[]" ]]; then
+            cache_set "$cache_key" "$fresh_json"
+            update_completion_cache "$fresh_json"
+
+            fresh_output=$(_render_outstanding "$fresh_json" "$filter_topic" "$filter_topics_str")
+
+            # Restore cursor and clear to end of screen
+            tput rc 2>/dev/null || true
+            tput ed 2>/dev/null || true
+
+            # Print fresh output
+            echo "$fresh_output"
+
+            # Show status
+            if [[ "$cached_output" != "$fresh_output" ]]; then
+                echo -e "${DIM}↻ Updated${NC}"
+            else
+                echo -e "${DIM}✓ Up to date${NC}"
+            fi
+
+            # Prefetch status for all PRs in background
+            prefetch_status_all "$fresh_json" &
+        else
+            # API failed - just remove the refreshing indicator
+            tput cuu 1 2>/dev/null || true
+            tput ed 2>/dev/null || true
+            echo -e "${DIM}✓ (cached)${NC}"
+        fi
+    else
+        # No cache - fetch with spinner
+        if is_interactive; then
+            show_spinner "Fetching PRs..." &
+            local spinner_pid=$!
+            fresh_json=$(_fetch_outstanding_json)
+            stop_spinner "$spinner_pid"
+        else
+            # Non-interactive (piped) - fetch quietly
+            fresh_json=$(_fetch_outstanding_json)
+        fi
+
+        if [[ -n "$fresh_json" && "$fresh_json" != "[]" ]]; then
+            cache_set "$cache_key" "$fresh_json"
+            update_completion_cache "$fresh_json"
+            _render_outstanding "$fresh_json" "$filter_topic" "$filter_topics_str"
+
+            # Prefetch status in background (only if interactive)
+            if is_interactive; then
+                prefetch_status_all "$fresh_json" &
+            fi
+        elif [[ "$fresh_json" == "[]" ]]; then
+            echo "No open PRs found for $GITHUB_USER"
+        else
+            echo -e "${RED}Failed to fetch PRs${NC}" >&2
+            return 1
+        fi
+    fi
 }

@@ -1,6 +1,33 @@
 # helpers_comments.sh - Comment-specific helper functions
 # shellcheck shell=bash
 
+# Get count of unresolved review threads
+# Usage: get_unresolved_count <pr_number>
+# Returns: number of unresolved threads
+get_unresolved_count() {
+    local pr_number="$1"
+
+    local graphql_query='
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+            }
+          }
+        }
+      }
+    }'
+
+    gh api graphql \
+        -f query="$graphql_query" \
+        -f owner="$REPO_OWNER" \
+        -f repo="$REPO_NAME" \
+        -F number="$pr_number" 2>/dev/null \
+    | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
+}
+
 # Get comments in display order (roots first, then their replies per root)
 # Usage: get_ordered_comments <pr_number>
 # Returns: JSON array of comments in display order

@@ -7,6 +7,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 # Source configuration and helpers
 source "$SCRIPT_DIR/prs.d/config.sh"
 source "$SCRIPT_DIR/prs.d/helpers.sh"
+source "$SCRIPT_DIR/prs.d/helpers_cache.sh"
 source "$SCRIPT_DIR/prs.d/helpers_comments.sh"
 source "$SCRIPT_DIR/prs.d/helpers_buildkite.sh"
 
@@ -22,7 +23,8 @@ usage() {
   echo "  -m, --merge        Add PR to merge queue (must target main)"
   echo "  -rq                Remove PR from merge queue"
   echo "  -qs                Show all PRs in merge queue"
-  echo "  -c, --comments     Show comments on a PR"
+  echo "  -c, --comments     Show unresolved comments on a PR"
+  echo "  -csr               Show all comments including resolved"
   echo "  -cr <topic> <#>    Reply to comment #"
   echo "  -crx <topic> <#>   Reply and resolve comment #"
   echo "  -ct <topic> <#>    Thumbs up comment #"
@@ -50,7 +52,8 @@ usage() {
   echo "  prs -d yaml        # Show diff for 'yaml' PR"
   echo "  prs -f yaml        # List files changed in 'yaml' PR"
   echo "  prs -m yaml        # Add 'yaml' PR to merge queue"
-  echo "  prs -c yaml        # Show comments on 'yaml' PR"
+  echo "  prs -c yaml        # Show unresolved comments on 'yaml' PR"
+  echo "  prs -csr yaml      # Show all comments including resolved"
   echo "  prs -cr yaml 2     # Reply to comment #2 on 'yaml' PR"
   echo "  prs -ct yaml 3     # Thumbs up comment #3 on 'yaml' PR"
   echo "  prs -cx yaml 1     # Resolve comment thread #1 on 'yaml' PR"
@@ -100,6 +103,11 @@ while [[ $# -gt 0 ]]; do
     ;;
   -c | --comments)
     MODE="comments"
+    shift
+    ;;
+  -csr)
+    MODE="comments"
+    EXTRA_ARGS+=("--show-resolved")
     shift
     ;;
   -cr)
