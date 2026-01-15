@@ -22,9 +22,8 @@ run_comments() {
     print_pr_header "$number" "$title" "$url"
     echo ""
 
-    # Fetch review comments (inline code comments)
     local comments_json
-    comments_json=$(gh api "repos/${REPO}/pulls/${number}/comments" 2>/dev/null)
+    comments_json=$(get_ordered_comments "$number")
 
     local count
     count=$(echo "$comments_json" | jq 'length')
@@ -37,26 +36,34 @@ run_comments() {
     echo -e "${BOLD}Review Comments${NC} ${DIM}(${count})${NC}"
     echo ""
 
-    # Process and display each comment
-    echo "$comments_json" | jq -r '.[] | @base64' | while read -r encoded; do
-        local comment author created path line body
+    # Display comments with threading
+    local comment_num=0 prev_root_id=""
+    while read -r encoded; do
+        ((++comment_num))
+        local comment id in_reply_to author created path line body
 
         comment=$(echo "$encoded" | base64 -d)
+        id=$(echo "$comment" | jq -r '.id')
+        in_reply_to=$(echo "$comment" | jq -r '.in_reply_to_id // empty')
         author=$(echo "$comment" | jq -r '.user.login')
         created=$(echo "$comment" | jq -r '.created_at | split("T")[0]')
         path=$(echo "$comment" | jq -r '.path')
         line=$(echo "$comment" | jq -r '.line // .original_line // "?"')
         body=$(echo "$comment" | jq -r '.body')
 
-        # Comment header: author and date
-        echo -e "${BOLD}${CYAN}@${author}${NC} ${DIM}${created}${NC}"
+        if [[ -z "$in_reply_to" ]]; then
+            # Root comment
+            echo -e "${BOLD}#${comment_num}${NC}  ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
+            echo -e "    ${YELLOW}${path}${NC}${DIM}:${line}${NC}"
+            echo "$body" | sed 's/^/    /'
+            prev_root_id="$id"
+        else
+            # Reply - show indented
+            echo ""
+            echo -e "    ${DIM}└─${NC} ${BOLD}#${comment_num}${NC}  ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
+            echo "$body" | sed 's/^/       /'
+        fi
+    done < <(echo "$comments_json" | jq -r '.[] | @base64')
 
-        # File location
-        echo -e "${YELLOW}${path}${NC}${DIM}:${line}${NC}"
-
-        # Comment body with indent
-        echo "$body" | sed 's/^/  /'
-
-        echo ""
-    done
+    echo ""
 }

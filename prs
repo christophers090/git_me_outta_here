@@ -7,6 +7,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 # Source configuration and helpers
 source "$SCRIPT_DIR/prs.d/config.sh"
 source "$SCRIPT_DIR/prs.d/helpers.sh"
+source "$SCRIPT_DIR/prs.d/helpers_comments.sh"
 source "$SCRIPT_DIR/prs.d/helpers_buildkite.sh"
 
 # Usage
@@ -21,8 +22,13 @@ usage() {
   echo "  -m, --merge        Add PR to merge queue (must target main)"
   echo "  -rq                Remove PR from merge queue"
   echo "  -qs                Show all PRs in merge queue"
-  echo "  -co, --comments    Show comments on a PR"
-  echo "  -c, --close        Close a PR"
+  echo "  -c, --comments     Show comments on a PR"
+  echo "  -cr <topic> <#>    Reply to comment #"
+  echo "  -crx <topic> <#>   Reply and resolve comment #"
+  echo "  -ct <topic> <#>    Thumbs up comment #"
+  echo "  -ctx <topic> <#>   Thumbs up and resolve comment #"
+  echo "  -cx <topic> <#>    Resolve comment thread #"
+  echo "  --close            Close a PR"
   echo "  --open             Reopen a closed PR"
   echo "  --closed           Show recent closed PRs"
   echo "  --merged           Show recent merged PRs"
@@ -44,8 +50,11 @@ usage() {
   echo "  prs -d yaml        # Show diff for 'yaml' PR"
   echo "  prs -f yaml        # List files changed in 'yaml' PR"
   echo "  prs -m yaml        # Add 'yaml' PR to merge queue"
-  echo "  prs -co yaml       # Show comments on 'yaml' PR"
-  echo "  prs -c yaml        # Close 'yaml' PR"
+  echo "  prs -c yaml        # Show comments on 'yaml' PR"
+  echo "  prs -cr yaml 2     # Reply to comment #2 on 'yaml' PR"
+  echo "  prs -ct yaml 3     # Thumbs up comment #3 on 'yaml' PR"
+  echo "  prs -cx yaml 1     # Resolve comment thread #1 on 'yaml' PR"
+  echo "  prs --close yaml   # Close 'yaml' PR"
   echo "  prs -w yaml        # Open 'yaml' PR on GitHub"
   echo "  prs -bw yaml       # Open Buildkite for 'yaml' PR"
   echo "  prs -bs yaml       # Show build steps for 'yaml' PR"
@@ -89,11 +98,31 @@ while [[ $# -gt 0 ]]; do
     MODE="merge"
     shift
     ;;
-  -co | --comments)
+  -c | --comments)
     MODE="comments"
     shift
     ;;
-  -c | --close)
+  -cr)
+    MODE="comment_reply"
+    shift
+    ;;
+  -crx)
+    MODE="comment_reply_resolve"
+    shift
+    ;;
+  -ct)
+    MODE="comment_thumbsup"
+    shift
+    ;;
+  -ctx)
+    MODE="comment_thumbsup_resolve"
+    shift
+    ;;
+  -cx)
+    MODE="comment_resolve"
+    shift
+    ;;
+  --close)
     MODE="close"
     shift
     ;;
