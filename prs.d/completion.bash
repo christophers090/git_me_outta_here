@@ -9,7 +9,7 @@ _prs_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # All available flags
-    opts="-o --outstanding -s --status -d --diff -f --files -m --merge -c --close -w --web -bw -bs -bc -br -brf -rq -qs --open --closed --merged -u --user -h --help"
+    opts="-o --outstanding -s --status -d --diff -f --files -m --merge -co --comments -c --close -w --web -bw -bs -bc -br -brf -bcon -rq -qs --open --closed --merged -u --user -h --help"
 
     # If completing a flag
     if [[ ${cur} == -* ]]; then

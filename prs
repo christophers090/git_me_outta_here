@@ -21,6 +21,7 @@ usage() {
   echo "  -m, --merge        Add PR to merge queue (must target main)"
   echo "  -rq                Remove PR from merge queue"
   echo "  -qs                Show all PRs in merge queue"
+  echo "  -co, --comments    Show comments on a PR"
   echo "  -c, --close        Close a PR"
   echo "  --open             Reopen a closed PR"
   echo "  --closed           Show recent closed PRs"
@@ -43,6 +44,7 @@ usage() {
   echo "  prs -d yaml        # Show diff for 'yaml' PR"
   echo "  prs -f yaml        # List files changed in 'yaml' PR"
   echo "  prs -m yaml        # Add 'yaml' PR to merge queue"
+  echo "  prs -co yaml       # Show comments on 'yaml' PR"
   echo "  prs -c yaml        # Close 'yaml' PR"
   echo "  prs -w yaml        # Open 'yaml' PR on GitHub"
   echo "  prs -bw yaml       # Open Buildkite for 'yaml' PR"
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   -m | --merge)
     MODE="merge"
+    shift
+    ;;
+  -co | --comments)
+    MODE="comments"
     shift
     ;;
   -c | --close)
