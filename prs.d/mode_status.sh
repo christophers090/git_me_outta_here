@@ -220,10 +220,14 @@ _render_status() {
 run_status() {
     local topic="$1"
 
-    # No topic: list all open PRs (no caching needed)
+    # No topic: list all open PRs (use outstanding cache if available)
     if [[ -z "$topic" ]]; then
         echo -e "${BOLD}Your open PRs:${NC}"
-        gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+        if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
+            cache_get "outstanding" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
+        else
+            gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+        fi
         return 0
     fi
 
@@ -309,17 +313,25 @@ run_status() {
         else
             echo -e "${RED}No PR found for topic:${NC} $topic"
             echo ""
-            # Try to find similar topics
-            local similar
-            similar=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null \
-                | jq -r --arg topic "$topic" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
+            # Try to find similar topics (use outstanding cache if available)
+            local similar outstanding_data
+            if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
+                outstanding_data=$(cache_get "outstanding")
+            else
+                outstanding_data=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null)
+            fi
+            similar=$(echo "$outstanding_data" | jq -r --arg topic "$topic" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
 
             if [[ -n "$similar" ]]; then
                 echo -e "${YELLOW}Similar topics:${NC}"
                 echo "$similar"
             else
                 echo -e "${BOLD}Your open PRs:${NC}"
-                gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+                if [[ -n "$outstanding_data" ]]; then
+                    echo "$outstanding_data" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
+                else
+                    gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+                fi
             fi
             return 1
         fi

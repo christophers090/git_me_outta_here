@@ -7,7 +7,12 @@ run_queue_status() {
     # Query the actual merge queue via GraphQL
     # Use headCommit on the entry (not PR) to get the queue's CI run
     local queue_json
-    queue_json=$(gh api graphql -f query='
+    local cache_key="queue"
+
+    if cache_is_fresh "$cache_key" "$CACHE_TTL_QUEUE"; then
+        queue_json=$(cache_get "$cache_key")
+    else
+        queue_json=$(gh api graphql -f query='
     {
       repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
         mergeQueue(branch: "main") {
@@ -42,6 +47,10 @@ run_queue_status() {
         }
       }
     }' 2>/dev/null)
+        if [[ -n "$queue_json" ]]; then
+            cache_set "$cache_key" "$queue_json"
+        fi
+    fi
 
     local queue_count
     queue_count=$(echo "$queue_json" | jq '.data.repository.mergeQueue.entries.nodes | length')
@@ -74,8 +83,8 @@ run_queue_status() {
         enqueued_at=$(echo "$entry" | jq -r '.enqueuedAt')
         bk_url=$(echo "$entry" | jq -r '.headCommit.statusCheckRollup.contexts.nodes | map(select(.context == "'"$CI_CHECK_CONTEXT"'")) | .[0].targetUrl // empty')
 
-        # Extract topic from body or branch name
-        topic=$(echo "$entry" | jq -r '.pullRequest.body // ""' | grep -oP 'Topic:\s*\K\S+' | head -1)
+        # Extract topic from body or branch name (case-insensitive)
+        topic=$(echo "$entry" | jq -r '.pullRequest.body // ""' | grep -oiP 'Topic:\s*\K\S+' | head -1 || true)
         if [[ -z "$topic" ]]; then
             topic=$(echo "$head_ref" | rev | cut -d'/' -f1 | rev)
         fi

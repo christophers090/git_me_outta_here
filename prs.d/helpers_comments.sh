@@ -56,16 +56,28 @@ get_ordered_comments() {
 }
 
 # Get comment info by display number (filters out resolved comments)
-# Usage: get_comment_info <pr_number> <comment_num>
+# Usage: get_comment_info <pr_number> <comment_num> [topic]
 # Returns: "comment_id:root_id" or empty if not found
 # root_id equals comment_id for root comments, or parent id for replies
+# If topic is provided, uses cached comments data if available
 get_comment_info() {
     local pr_number="$1"
     local comment_num="$2"
+    local topic="${3:-}"
 
     local comments_json resolution_status
-    comments_json=$(get_ordered_comments "$pr_number")
-    resolution_status=$(fetch_thread_resolution_status "$pr_number")
+    local cache_key="comments_data_${topic}"
+
+    # Try to use cached data if topic provided and cache is fresh
+    if [[ -n "$topic" ]] && cache_is_fresh "$cache_key" "$CACHE_TTL_COMMENTS"; then
+        local cached
+        cached=$(cache_get "$cache_key")
+        comments_json=$(echo "$cached" | jq '.comments')
+        resolution_status=$(echo "$cached" | jq '.resolution')
+    else
+        comments_json=$(get_ordered_comments "$pr_number")
+        resolution_status=$(fetch_thread_resolution_status "$pr_number")
+    fi
 
     # Filter out resolved comments same way as display
     echo "$comments_json" | jq -r --argjson n "$comment_num" --argjson res "$resolution_status" '

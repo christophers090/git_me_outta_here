@@ -25,7 +25,7 @@ run_comment_thumbsup() {
     number=$(pr_field "$pr_json" "number")
 
     local info
-    info=$(get_comment_info "$number" "$comment_num")
+    info=$(get_comment_info "$number" "$comment_num" "$topic")
 
     if [[ -z "$info" || "$info" == "null:null" ]]; then
         echo -e "${RED}Error:${NC} Comment #${comment_num} not found"

@@ -27,7 +27,7 @@ run_comment_reply_resolve() {
             exit 1
         fi
         number=$(pr_field "$pr_json" "number")
-        info=$(get_comment_info "$number" "$comment_num")
+        info=$(get_comment_info "$number" "$comment_num" "$topic")
         if [[ -z "$info" || "$info" == "null:null" ]]; then
             echo "ERROR:COMMENT_NOT_FOUND" > "$tmp_file"
             exit 1

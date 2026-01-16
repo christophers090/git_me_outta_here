@@ -38,3 +38,5 @@ CACHE_TTL_PR_LOOKUP=30     # find_pr results
 CACHE_TTL_COMMENTS=120     # Comments data
 CACHE_TTL_BUILDKITE=30     # Buildkite build data
 CACHE_TTL_QUEUE=15         # Merge queue status
+CACHE_TTL_MERGED=120       # Merged PRs (historical)
+CACHE_TTL_CLOSED=60        # Closed PRs (historical)
