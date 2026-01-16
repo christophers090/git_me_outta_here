@@ -6,7 +6,7 @@ run_reopen() {
     require_topic "reopen" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "closed" "number,title,url")
+    pr_json=$(cached_find_pr "$topic" "closed" "number,title,url")
 
     if ! pr_exists "$pr_json"; then
         echo -e "${RED}No closed PR found for topic:${NC} $topic"
@@ -23,6 +23,7 @@ run_reopen() {
 
     if gh pr reopen "$number" -R "$REPO"; then
         echo -e "  ${CHECK} PR reopened"
+        invalidate_pr_caches "$topic"
         return 0
     else
         echo -e "  ${CROSS} Failed to reopen PR"

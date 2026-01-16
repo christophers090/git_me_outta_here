@@ -6,7 +6,7 @@ run_close() {
     require_topic "close" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "open" "number,title,url")
+    pr_json=$(cached_find_pr "$topic" "open" "number,title,url")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found_open "$topic"
@@ -23,6 +23,7 @@ run_close() {
 
     if gh pr close "$number" -R "$REPO"; then
         echo -e "  ${CHECK} PR closed"
+        invalidate_pr_caches "$topic"
         return 0
     else
         echo -e "  ${CROSS} Failed to close PR"

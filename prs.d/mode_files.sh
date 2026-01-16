@@ -6,7 +6,7 @@ run_files() {
     require_topic "files" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "all" "number,title,files")
+    pr_json=$(cached_find_pr "$topic" "all" "number,title,files")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found "$topic"

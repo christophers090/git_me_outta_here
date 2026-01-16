@@ -6,7 +6,7 @@ run_merge() {
     require_topic "merge" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "open" "number,title,baseRefName,url")
+    pr_json=$(cached_find_pr "$topic" "open" "number,title,baseRefName,url")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found_open "$topic"
@@ -32,6 +32,7 @@ run_merge() {
 
     if gh pr merge "$number" -R "$REPO"; then
         echo -e "  ${CHECK} Added to merge queue"
+        invalidate_pr_caches "$topic"
         return 0
     else
         echo -e "  ${CROSS} Failed to add to merge queue"

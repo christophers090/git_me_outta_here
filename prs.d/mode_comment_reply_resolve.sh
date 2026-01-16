@@ -21,7 +21,7 @@ run_comment_reply_resolve() {
     local tmp_file
     tmp_file=$(mktemp)
     (
-        pr_json=$(find_pr "$topic" "all" "number")
+        pr_json=$(cached_find_pr "$topic" "all" "number")
         if ! pr_exists "$pr_json"; then
             echo "ERROR:PR_NOT_FOUND" > "$tmp_file"
             exit 1

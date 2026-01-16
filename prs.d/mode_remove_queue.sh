@@ -6,7 +6,7 @@ run_remove_queue() {
     require_topic "remove_queue" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "open" "number,title,url,autoMergeRequest")
+    pr_json=$(cached_find_pr "$topic" "open" "number,title,url,autoMergeRequest")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found_open "$topic"

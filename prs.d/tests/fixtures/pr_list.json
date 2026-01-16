@@ -1,0 +1,38 @@
+[
+  {
+    "number": 123,
+    "title": "Add new feature",
+    "url": "https://github.com/test/repo/pull/123",
+    "body": "Topic: feature-x\n\nDescription of the feature",
+    "headRefName": "testuser/revup/main/feature-x",
+    "reviewDecision": "APPROVED",
+    "statusCheckRollup": [
+      {"context": "buildkite/test", "state": "SUCCESS"},
+      {"context": "ci/lint", "state": "SUCCESS"}
+    ]
+  },
+  {
+    "number": 124,
+    "title": "Fix bug in parser",
+    "url": "https://github.com/test/repo/pull/124",
+    "body": "Topic: bugfix-y\nRelative: feature-x\n\nFixes the parser bug",
+    "headRefName": "testuser/revup/main/bugfix-y",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "statusCheckRollup": [
+      {"context": "buildkite/test", "state": "PENDING"},
+      {"context": "ci/lint", "state": "SUCCESS"}
+    ]
+  },
+  {
+    "number": 125,
+    "title": "Update documentation",
+    "url": "https://github.com/test/repo/pull/125",
+    "body": "Topic: docs-update\n\nUpdates the README",
+    "headRefName": "testuser/revup/main/docs-update",
+    "reviewDecision": null,
+    "statusCheckRollup": [
+      {"context": "buildkite/test", "state": "FAILURE"},
+      {"context": "ci/lint", "state": "SUCCESS"}
+    ]
+  }
+]

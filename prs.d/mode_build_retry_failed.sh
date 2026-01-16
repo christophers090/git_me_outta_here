@@ -6,7 +6,7 @@ run_build_retry_failed() {
     require_topic "build_retry_failed" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "all" "number,title,statusCheckRollup")
+    pr_json=$(cached_find_pr "$topic" "all" "number,title,statusCheckRollup")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found "$topic"

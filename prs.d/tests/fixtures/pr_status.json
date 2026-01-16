@@ -1,0 +1,21 @@
+[
+  {
+    "number": 123,
+    "title": "Add new feature",
+    "state": "OPEN",
+    "url": "https://github.com/test/repo/pull/123",
+    "reviewDecision": "APPROVED",
+    "reviewRequests": [],
+    "latestReviews": [
+      {"author": {"login": "reviewer1"}, "state": "APPROVED"}
+    ],
+    "statusCheckRollup": [
+      {"context": "buildkite/test", "state": "SUCCESS", "targetUrl": "https://buildkite.com/test/builds/100"},
+      {"context": "ci/lint", "state": "SUCCESS"}
+    ],
+    "autoMergeRequest": {"enabledAt": "2024-01-15T10:00:00Z"},
+    "mergeStateStatus": "CLEAN",
+    "labels": [{"name": "merge-when-ready"}],
+    "isDraft": false
+  }
+]

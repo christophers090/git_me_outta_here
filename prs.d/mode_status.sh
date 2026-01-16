@@ -7,34 +7,65 @@ _STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,latestRevie
 # Fetch PR JSON for a topic
 _fetch_status_json() {
     local topic="$1"
-    find_pr "$topic" "all" "$_STATUS_FIELDS"
+    cached_find_pr "$topic" "all" "$_STATUS_FIELDS"
 }
 
 # Render status from PR JSON
-# Note: Does NOT fetch unresolved_count (that's a separate API call we skip for cached view)
+# If cached_comment_count is provided, use it; otherwise fetch fresh
 _render_status() {
     local pr_json="$1"
-    local skip_comments="${2:-false}"
+    local cached_comment_count="${2:-}"
 
     if ! pr_exists "$pr_json"; then
         return 1
     fi
 
-    # Extract PR data
-    local pr number title state url review_decision merge_state is_draft auto_merge
-    pr=$(echo "$pr_json" | jq '.[0]')
-    number=$(echo "$pr" | jq -r '.number')
-    title=$(echo "$pr" | jq -r '.title')
-    state=$(echo "$pr" | jq -r '.state')
-    url=$(echo "$pr" | jq -r '.url')
-    review_decision=$(echo "$pr" | jq -r '.reviewDecision // "NONE"')
-    merge_state=$(echo "$pr" | jq -r '.mergeStateStatus // "UNKNOWN"')
-    is_draft=$(echo "$pr" | jq -r '.isDraft')
-    auto_merge=$(echo "$pr" | jq -r 'if .autoMergeRequest != null then "Yes" else "No" end')
+    # Extract ALL data in ONE jq call - output as newline-separated for read
+    local number title state url review_decision merge_state is_draft auto_merge buildkite_url
+    local ci_passed ci_failed ci_pending ci_total ci_failed_names ci_pending_names
+    local pending_reviewers approvers change_requesters merge_label
 
-    # Get Buildkite URL from status checks
-    local buildkite_url
-    buildkite_url=$(echo "$pr" | jq -r ".statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+    {
+        read -r number
+        read -r title
+        read -r state
+        read -r url
+        read -r review_decision
+        read -r merge_state
+        read -r is_draft
+        read -r auto_merge
+        read -r buildkite_url
+        read -r ci_passed
+        read -r ci_failed
+        read -r ci_pending
+        read -r ci_total
+        IFS= read -r -d $'\x1e' ci_failed_names
+        IFS= read -r -d $'\x1e' ci_pending_names
+        read -r pending_reviewers
+        read -r approvers
+        read -r change_requesters
+        read -r merge_label
+    } < <(echo "$pr_json" | jq -r --arg ci_ctx "$CI_CHECK_CONTEXT" '.[0] |
+        .number,
+        .title,
+        .state,
+        .url,
+        (.reviewDecision // "NONE"),
+        (.mergeStateStatus // "UNKNOWN"),
+        .isDraft,
+        (if .autoMergeRequest != null then "Yes" else "No" end),
+        (((.statusCheckRollup // [])[] | select(.context == $ci_ctx) | .targetUrl) // ""),
+        ([(.statusCheckRollup // [])[] | select(.state == "SUCCESS")] | length),
+        ([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR")] | length),
+        ([(.statusCheckRollup // [])[] | select(.state == "PENDING" or .state == "EXPECTED")] | length),
+        ((.statusCheckRollup // []) | length),
+        (([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
+        (([(.statusCheckRollup // [])[] | select(.state == "PENDING" or .state == "EXPECTED") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
+        ([(.reviewRequests // [])[] | if .name then "@\(.slug // .name)" else "@\(.login)" end] | join(", ")),
+        ([(.latestReviews // [])[] | select(.state == "APPROVED") | "@\(.author.login)"] | join(", ")),
+        ([(.latestReviews // [])[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"] | join(", ")),
+        (((.labels // [])[] | select(.name | ascii_downcase | contains("merge")) | .name) // "")
+    ')
 
     # Header
     echo -e "${BOLD}${BLUE}PR #${number}:${NC} ${title}"
@@ -47,29 +78,20 @@ _render_status() {
 
     # CI Status section
     echo -e "${BOLD}CI Status:${NC}"
-    local checks passed failed pending total
-    checks=$(echo "$pr" | jq -r '.statusCheckRollup // []')
-    if [[ "$checks" == "[]" ]] || [[ -z "$checks" ]]; then
+    if [[ "$ci_total" -eq 0 ]]; then
         echo "  No CI checks found"
+    elif [[ "$ci_failed" -gt 0 ]]; then
+        echo -e "  ${RED}${ci_failed} failed${NC}, ${GREEN}${ci_passed} passed${NC}, ${YELLOW}${ci_pending} pending${NC} (${ci_total} total)"
+        echo ""
+        echo -e "  ${RED}Failed:${NC}"
+        echo "$ci_failed_names" | sed 's/^/    /'
+    elif [[ "$ci_pending" -gt 0 ]]; then
+        echo -e "  ${GREEN}${ci_passed} passed${NC}, ${YELLOW}${ci_pending} pending${NC} (${ci_total} total)"
+        echo ""
+        echo -e "  ${YELLOW}Pending:${NC}"
+        echo "$ci_pending_names" | sed 's/^/    /'
     else
-        passed=$(echo "$pr" | jq '[.statusCheckRollup[] | select(.state == "SUCCESS")] | length')
-        failed=$(echo "$pr" | jq '[.statusCheckRollup[] | select(.state == "FAILURE" or .state == "ERROR")] | length')
-        pending=$(echo "$pr" | jq '[.statusCheckRollup[] | select(.state == "PENDING" or .state == "EXPECTED")] | length')
-        total=$(echo "$pr" | jq '.statusCheckRollup | length')
-
-        if [[ "$failed" -gt 0 ]]; then
-            echo -e "  ${RED}${failed} failed${NC}, ${GREEN}${passed} passed${NC}, ${YELLOW}${pending} pending${NC} (${total} total)"
-            echo ""
-            echo -e "  ${RED}Failed:${NC}"
-            echo "$pr" | jq -r '.statusCheckRollup[] | select(.state == "FAILURE" or .state == "ERROR") | "    \(.context // .name)"'
-        elif [[ "$pending" -gt 0 ]]; then
-            echo -e "  ${GREEN}${passed} passed${NC}, ${YELLOW}${pending} pending${NC} (${total} total)"
-            echo ""
-            echo -e "  ${YELLOW}Pending:${NC}"
-            echo "$pr" | jq -r '.statusCheckRollup[] | select(.state == "PENDING" or .state == "EXPECTED") | "    \(.context // .name)"'
-        else
-            echo -e "  ${GREEN}All ${passed} checks passed${NC}"
-        fi
+        echo -e "  ${GREEN}All ${ci_passed} checks passed${NC}"
     fi
     echo ""
 
@@ -90,29 +112,27 @@ _render_status() {
             ;;
     esac
 
-    local pending_reviewers approvers change_requesters
-    pending_reviewers=$(echo "$pr" | jq -r '.reviewRequests[] | if .name then "@\(.slug // .name)" else "@\(.login)" end' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
     if [[ -n "$pending_reviewers" ]]; then
         echo -e "  Pending: ${YELLOW}${pending_reviewers}${NC}"
     fi
-
-    approvers=$(echo "$pr" | jq -r '.latestReviews[] | select(.state == "APPROVED") | "@\(.author.login)"' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
     if [[ -n "$approvers" ]]; then
         echo -e "  Approved by: ${GREEN}${approvers}${NC}"
     fi
-
-    change_requesters=$(echo "$pr" | jq -r '.latestReviews[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
     if [[ -n "$change_requesters" ]]; then
         echo -e "  Changes requested by: ${RED}${change_requesters}${NC}"
     fi
 
-    # Show unresolved comments (skip if rendering cached - will be added on fresh)
-    if [[ "$skip_comments" != "true" ]]; then
-        local unresolved_count
+    # Show unresolved comments (use cached if provided, otherwise fetch)
+    local unresolved_count
+    if [[ -n "$cached_comment_count" ]]; then
+        unresolved_count="$cached_comment_count"
+    else
         unresolved_count=$(get_unresolved_count "$number")
-        if [[ "$unresolved_count" -gt 0 ]]; then
-            echo -e "  Unresolved comments: ${YELLOW}${unresolved_count}${NC}"
-        fi
+    fi
+    if [[ "$unresolved_count" -gt 0 ]]; then
+        echo -e "  Unresolved comments: ${YELLOW}${unresolved_count}${NC}"
+    else
+        echo -e "  Unresolved comments: ${GREEN}0${NC}"
     fi
     echo ""
 
@@ -139,11 +159,8 @@ _render_status() {
             ;;
     esac
     echo -e "  Merge-when-ready: ${auto_merge}"
-
-    local has_mwr_label
-    has_mwr_label=$(echo "$pr" | jq -r '.labels[] | select(.name | ascii_downcase | contains("merge")) | .name' 2>/dev/null | head -1)
-    if [[ -n "$has_mwr_label" ]]; then
-        echo -e "  Label: ${CYAN}${has_mwr_label}${NC}"
+    if [[ -n "$merge_label" ]]; then
+        echo -e "  Label: ${CYAN}${merge_label}${NC}"
     fi
 }
 
@@ -158,48 +175,43 @@ run_status() {
     fi
 
     local cache_key="status_${topic}"
-    local cached_json fresh_json
+    local comments_cache_key="comments_${topic}"
+    local cached_json fresh_json cached_comments
 
     cached_json=$(cache_get "$cache_key")
+    cached_comments=$(cache_get "$comments_cache_key")
 
     if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && is_interactive; then
-        # Have valid cache - show it immediately, then refresh
-        local cached_output fresh_output line_count
-
-        # Render cached (skip comments API call for speed)
-        cached_output=$(_render_status "$cached_json" "true")
-        line_count=$(echo "$cached_output" | wc -l)
-
-        # Print cached output + loading indicator
-        echo "$cached_output"
+        # Have valid cache - render directly to stdout (fast!)
+        _render_status "$cached_json" "$cached_comments"
         echo -e "${DIM}⟳ Refreshing...${NC}"
 
-        # Fetch fresh data
+        # Fetch fresh data in background-ish (user sees cached immediately)
         fresh_json=$(_fetch_status_json "$topic")
 
         if pr_exists "$fresh_json"; then
-            cache_set "$cache_key" "$fresh_json"
+            # Check if data changed by comparing JSON
+            if [[ "$fresh_json" != "$cached_json" ]] || [[ -z "$cached_comments" ]]; then
+                cache_set "$cache_key" "$fresh_json"
 
-            # Render fresh (with comments)
-            fresh_output=$(_render_status "$fresh_json" "false")
+                local pr_number fresh_comments
+                pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
+                fresh_comments=$(get_unresolved_count "$pr_number")
+                cache_set "$comments_cache_key" "$fresh_comments"
 
-            # Move cursor up and clear
-            tput cuu $((line_count + 1)) 2>/dev/null || true
-            tput ed 2>/dev/null || true
-
-            # Print fresh output
-            echo "$fresh_output"
-
-            # Show status
-            if [[ "$cached_output" != "$fresh_output" ]]; then
+                # Clear and re-render with fresh data
+                tput clear 2>/dev/null || true
+                _render_status "$fresh_json" "$fresh_comments"
                 echo -e "${DIM}↻ Updated${NC}"
             else
+                # Just update the refreshing line
+                tput cuu 1 2>/dev/null || true
+                tput el 2>/dev/null || true
                 echo -e "${DIM}✓ Up to date${NC}"
             fi
         else
-            # API failed or PR not found - just remove refreshing indicator
             tput cuu 1 2>/dev/null || true
-            tput ed 2>/dev/null || true
+            tput el 2>/dev/null || true
             echo -e "${DIM}✓ (cached)${NC}"
         fi
     else
@@ -215,7 +227,14 @@ run_status() {
 
         if pr_exists "$fresh_json"; then
             cache_set "$cache_key" "$fresh_json"
-            _render_status "$fresh_json" "false"
+
+            # Fetch comment count and cache it
+            local pr_number fresh_comments
+            pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
+            fresh_comments=$(get_unresolved_count "$pr_number")
+            cache_set "$comments_cache_key" "$fresh_comments"
+
+            _render_status "$fresh_json" "$fresh_comments"
         else
             echo -e "${RED}No PR found for topic:${NC} $topic"
             echo ""

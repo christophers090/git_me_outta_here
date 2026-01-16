@@ -14,7 +14,7 @@ run_comment_thumbsup_resolve() {
     fi
 
     local pr_json
-    pr_json=$(find_pr "$topic" "all" "number")
+    pr_json=$(cached_find_pr "$topic" "all" "number")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found "$topic"

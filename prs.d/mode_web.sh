@@ -6,7 +6,7 @@ run_web() {
     require_topic "web" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "all" "number,title,url")
+    pr_json=$(cached_find_pr "$topic" "all" "number,title,url")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found "$topic"

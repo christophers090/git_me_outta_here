@@ -1,30 +1,40 @@
 # helpers_comments.sh - Comment-specific helper functions
 # shellcheck shell=bash
 
+# Get resolution status for all review threads
+# Returns JSON map of root_comment_id -> isResolved
+fetch_thread_resolution_status() {
+    local pr_number="$1"
+
+    local query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { databaseId } } } } } } }'
+
+    jq -n \
+        --arg query "$query" \
+        --arg owner "$REPO_OWNER" \
+        --arg repo "$REPO_NAME" \
+        --argjson number "$pr_number" \
+        '{query: $query, variables: {owner: $owner, repo: $repo, number: $number}}' \
+    | gh api graphql --input - 2>/dev/null \
+    | jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
+          {key: (.comments.nodes[0].databaseId | tostring), value: .isResolved}] |
+          from_entries'
+}
+
 # Get count of unresolved review threads
 # Usage: get_unresolved_count <pr_number>
 # Returns: number of unresolved threads
 get_unresolved_count() {
     local pr_number="$1"
 
-    local graphql_query='
-    query($owner: String!, $repo: String!, $number: Int!) {
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) {
-          reviewThreads(first: 100) {
-            nodes {
-              isResolved
-            }
-          }
-        }
-      }
-    }'
+    local query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved } } } } }'
 
-    gh api graphql \
-        -f query="$graphql_query" \
-        -f owner="$REPO_OWNER" \
-        -f repo="$REPO_NAME" \
-        -F number="$pr_number" 2>/dev/null \
+    jq -n \
+        --arg query "$query" \
+        --arg owner "$REPO_OWNER" \
+        --arg repo "$REPO_NAME" \
+        --argjson number "$pr_number" \
+        '{query: $query, variables: {owner: $owner, repo: $repo, number: $number}}' \
+    | gh api graphql --input - 2>/dev/null \
     | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
 }
 
@@ -45,15 +55,25 @@ get_ordered_comments() {
     '
 }
 
-# Get comment info by display number
+# Get comment info by display number (filters out resolved comments)
 # Usage: get_comment_info <pr_number> <comment_num>
 # Returns: "comment_id:root_id" or empty if not found
 # root_id equals comment_id for root comments, or parent id for replies
 get_comment_info() {
     local pr_number="$1"
     local comment_num="$2"
-    get_ordered_comments "$pr_number" | jq -r --argjson n "$comment_num" '
-        .[$n - 1] | "\(.id):\(.in_reply_to_id // .id)"
+
+    local comments_json resolution_status
+    comments_json=$(get_ordered_comments "$pr_number")
+    resolution_status=$(fetch_thread_resolution_status "$pr_number")
+
+    # Filter out resolved comments same way as display
+    echo "$comments_json" | jq -r --argjson n "$comment_num" --argjson res "$resolution_status" '
+        [$res | to_entries | map(select(.value == true)) | .[].key | tonumber] as $resolved_ids |
+        [.[] | select(
+            ((.in_reply_to_id == null) and ((.id | IN($resolved_ids[])) | not)) or
+            (((.in_reply_to_id == null) | not) and ((.in_reply_to_id | IN($resolved_ids[])) | not))
+        )] | .[$n - 1] | "\(.id):\(.in_reply_to_id // .id)"
     '
 }
 
@@ -81,29 +101,16 @@ resolve_thread() {
     local root_id="$2"
     local display_num="$3"
 
-    local graphql_query='
-    query($owner: String!, $repo: String!, $number: Int!) {
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) {
-          reviewThreads(first: 100) {
-            nodes {
-              id
-              isResolved
-              comments(first: 1) {
-                nodes { databaseId }
-              }
-            }
-          }
-        }
-      }
-    }'
+    local query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } } } } }'
 
     local threads_json
-    threads_json=$(gh api graphql \
-        -f query="$graphql_query" \
-        -f owner="$REPO_OWNER" \
-        -f repo="$REPO_NAME" \
-        -F number="$pr_number" 2>/dev/null)
+    threads_json=$(jq -n \
+        --arg query "$query" \
+        --arg owner "$REPO_OWNER" \
+        --arg repo "$REPO_NAME" \
+        --argjson number "$pr_number" \
+        '{query: $query, variables: {owner: $owner, repo: $repo, number: $number}}' \
+    | gh api graphql --input - 2>/dev/null)
 
     if [[ -z "$threads_json" ]]; then
         echo -e "${CROSS} Failed to fetch review threads"
@@ -132,16 +139,11 @@ resolve_thread() {
         return 0
     fi
 
-    local resolve_mutation='
-    mutation($threadId: ID!) {
-      resolveReviewThread(input: {threadId: $threadId}) {
-        thread { isResolved }
-      }
-    }'
+    local mutation='mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }'
 
-    if gh api graphql \
-        -f query="$resolve_mutation" \
-        -f threadId="$thread_id" >/dev/null 2>&1; then
+    if jq -n --arg query "$mutation" --arg threadId "$thread_id" \
+        '{query: $query, variables: {threadId: $threadId}}' \
+        | gh api graphql --input - >/dev/null 2>&1; then
         echo -e "${CHECK} Resolved thread #${display_num}"
         return 0
     else

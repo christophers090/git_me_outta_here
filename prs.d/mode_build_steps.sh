@@ -6,7 +6,7 @@ run_build_steps() {
     require_topic "build_steps" "$topic" || return 1
 
     local pr_json
-    pr_json=$(find_pr "$topic" "all" "number,title,statusCheckRollup")
+    pr_json=$(cached_find_pr "$topic" "all" "number,title,statusCheckRollup")
 
     if ! pr_exists "$pr_json"; then
         pr_not_found "$topic"

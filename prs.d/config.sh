@@ -30,3 +30,11 @@ NC='\033[0m'
 # Symbols
 CHECK="${GREEN}✓${NC}"
 CROSS="${RED}✗${NC}"
+
+# Cache TTLs (seconds)
+CACHE_TTL_OUTSTANDING=60   # Open PR list
+CACHE_TTL_STATUS=30        # Individual PR status
+CACHE_TTL_PR_LOOKUP=30     # find_pr results
+CACHE_TTL_COMMENTS=120     # Comments data
+CACHE_TTL_BUILDKITE=30     # Buildkite build data
+CACHE_TTL_QUEUE=15         # Merge queue status

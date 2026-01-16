@@ -3,8 +3,7 @@
 
 # Cache configuration
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/prs"
-CACHE_TTL_OUTSTANDING=60  # seconds
-CACHE_TTL_STATUS=30       # seconds
+# TTL constants defined in config.sh
 
 # Initialize cache directory
 cache_init() {
@@ -63,6 +62,45 @@ cache_age() {
     fi
 }
 
+# Cached wrapper for find_pr - avoids repeated API calls
+# Usage: cached_find_pr <topic> [state] [fields]
+# Returns: cached PR JSON if fresh, otherwise fetches and caches
+cached_find_pr() {
+    local topic="$1"
+    local state="${2:-all}"
+    local fields="${3:-number,title,url}"
+    # Include fields in cache key to avoid returning incomplete data
+    local fields_hash="${fields//,/_}"
+    local cache_key="pr_${topic}_${state}_${fields_hash}"
+
+    # Return from cache if fresh
+    if cache_is_fresh "$cache_key" "$CACHE_TTL_PR_LOOKUP"; then
+        cache_get "$cache_key"
+        return 0
+    fi
+
+    # Fetch fresh data using the original find_pr
+    local result
+    result=$(find_pr "$topic" "$state" "$fields")
+
+    # Cache if we got valid results
+    if [[ -n "$result" && "$result" != "[]" ]]; then
+        cache_set "$cache_key" "$result"
+    fi
+
+    echo "$result"
+}
+
+# Invalidate all caches for a topic (call after mutations like close/merge)
+# Usage: invalidate_pr_caches <topic>
+invalidate_pr_caches() {
+    local topic="$1"
+    rm -f "$CACHE_DIR"/pr_"${topic}"_*.json "$CACHE_DIR"/pr_"${topic}"_*.ts 2>/dev/null || true
+    rm -f "$CACHE_DIR"/status_"${topic}".json "$CACHE_DIR"/status_"${topic}".ts 2>/dev/null || true
+    rm -f "$CACHE_DIR"/comments_"${topic}".json "$CACHE_DIR"/comments_"${topic}".ts 2>/dev/null || true
+    rm -f "$CACHE_DIR"/comments_data_"${topic}".json "$CACHE_DIR"/comments_data_"${topic}".ts 2>/dev/null || true
+}
+
 # Check if output is going to a terminal (for animation decisions)
 is_interactive() {
     [[ -t 1 ]]
@@ -93,127 +131,83 @@ stop_spinner() {
     tput cnorm 2>/dev/null || true  # Show cursor
 }
 
-# Render output with cache-then-refresh pattern
-# Args:
-#   $1 - cache_key
-#   $2 - ttl in seconds
-#   $3 - fetch command (string to eval)
-#   $4 - render function name (called with JSON as $1)
-#
-# Flow:
-#   - If cached: render cached, show "refreshing", fetch, update display
-#   - If no cache: show spinner, fetch, render
-render_with_refresh() {
-    local cache_key="$1"
-    local ttl="$2"
-    local fetch_cmd="$3"
-    local render_fn="$4"
-
-    local cached_json fresh_json
-    local cached_output fresh_output
-    local line_count
-
-    # Check for cached data (even if stale, for display)
-    cached_json=$(cache_get "$cache_key")
-
-    if [[ -n "$cached_json" ]] && is_interactive; then
-        # Have cache - show it immediately, then refresh
-        cached_output=$("$render_fn" "$cached_json")
-        line_count=$(echo "$cached_output" | wc -l)
-
-        # Print cached output
-        echo "$cached_output"
-        echo -e "${DIM}⟳ Refreshing...${NC}"
-
-        # Fetch fresh data
-        fresh_json=$(eval "$fetch_cmd" 2>/dev/null) || fresh_json=""
-
-        if [[ -n "$fresh_json" ]]; then
-            cache_set "$cache_key" "$fresh_json"
-            fresh_output=$("$render_fn" "$fresh_json")
-        else
-            # API failed - keep showing cached
-            fresh_output="$cached_output"
-        fi
-
-        # Move cursor up and clear (cached output + refreshing line)
-        tput cuu $((line_count + 1)) 2>/dev/null || true
-        tput ed 2>/dev/null || true
-
-        # Print fresh output
-        echo "$fresh_output"
-
-        # Show status
-        if [[ "$cached_output" != "$fresh_output" ]]; then
-            echo -e "${DIM}↻ Updated${NC}"
-        else
-            echo -e "${DIM}✓ Up to date${NC}"
-        fi
-
-        # Return the fresh JSON for further processing
-        echo "$fresh_json"
-    else
-        # No cache or non-interactive - fetch with spinner
-        if is_interactive; then
-            show_spinner "Fetching..." &
-            local spinner_pid=$!
-            fresh_json=$(eval "$fetch_cmd" 2>/dev/null) || fresh_json=""
-            stop_spinner "$spinner_pid"
-        else
-            # Non-interactive (piped) - just fetch quietly
-            fresh_json=$(eval "$fetch_cmd" 2>/dev/null) || fresh_json=""
-        fi
-
-        if [[ -n "$fresh_json" ]]; then
-            cache_set "$cache_key" "$fresh_json"
-            "$render_fn" "$fresh_json"
-        else
-            echo -e "${RED}Failed to fetch data${NC}" >&2
-            return 1
-        fi
-
-        echo "$fresh_json"
-    fi
-}
-
-# Background prefetch status for all open PRs
-# Called after outstanding list is fetched
-prefetch_status_all() {
+# Background prefetch status AND comments for all open PRs
+# Called after outstanding list is fetched - makes subsequent prs <topic> and prs -c <topic> instant
+# Completely non-blocking - spawns background jobs and returns immediately
+prefetch_all_pr_data() {
     local prs_json="$1"
 
     # Don't prefetch if non-interactive or no data
     is_interactive || return 0
     [[ -n "$prs_json" ]] || return 0
 
-    # Extract topics from PR JSON
-    local topics
-    topics=$(echo "$prs_json" | jq -r '
+    # Extract topics and PR numbers from JSON
+    local pr_data
+    pr_data=$(echo "$prs_json" | jq -r '
         .[] |
-        ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))
+        ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last)) as $topic |
+        "\(.number)|\($topic)|\(.title)|\(.url)"
     ' 2>/dev/null) || return 0
 
-    # Spawn background jobs to prefetch each PR's detailed status
-    local topic
-    while IFS= read -r topic; do
+    # Spawn background jobs to prefetch each PR's data
+    while IFS='|' read -r number topic title url; do
         [[ -z "$topic" || "$topic" == "null" ]] && continue
 
-        # Skip if we have fresh cache
-        cache_is_fresh "status_${topic}" "$CACHE_TTL_STATUS" && continue
+        # Check if both caches are fresh - skip if so
+        local need_status="" need_comments=""
+        cache_is_fresh "status_${topic}" "$CACHE_TTL_STATUS" || need_status=1
+        cache_is_fresh "comments_data_${topic}" "$CACHE_TTL_COMMENTS" || need_comments=1
 
-        # Background fetch - find and cache the full PR data
+        [[ -z "$need_status" && -z "$need_comments" ]] && continue
+
+        # Spawn background job for this PR
         (
-            local branch_pattern="${BRANCH_USER}/${BRANCH_PREFIX}/${topic}"
-            local status_json
-            status_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state all \
-                --head "$branch_pattern" \
-                --json number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft \
-                2>/dev/null)
+            # Prefetch status if needed
+            if [[ -n "$need_status" ]]; then
+                local branch_pattern="${BRANCH_USER}/${BRANCH_PREFIX}/${topic}"
+                local status_json
+                status_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state all \
+                    --head "$branch_pattern" \
+                    --json number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft \
+                    2>/dev/null)
 
-            if [[ -n "$status_json" && "$(echo "$status_json" | jq 'length')" -gt 0 ]]; then
-                cache_set "status_${topic}" "$status_json"
+                if [[ -n "$status_json" && "$(echo "$status_json" | jq 'length')" -gt 0 ]]; then
+                    cache_set "status_${topic}" "$status_json"
+                fi
             fi
-        ) &
-    done <<< "$topics"
 
-    # Don't wait for background jobs - let them complete on their own
+            # Prefetch comments if needed
+            if [[ -n "$need_comments" && -n "$number" ]]; then
+                local comments_json resolution_status
+                comments_json=$(get_ordered_comments "$number" 2>/dev/null)
+                resolution_status=$(fetch_thread_resolution_status "$number" 2>/dev/null)
+
+                if [[ -n "$comments_json" && -n "$resolution_status" ]]; then
+                    # Build full comments data structure
+                    local data
+                    data=$(jq -n \
+                        --argjson number "$number" \
+                        --arg title "$title" \
+                        --arg url "$url" \
+                        --argjson comments "$comments_json" \
+                        --argjson resolution "$resolution_status" \
+                        '{number: $number, title: $title, url: $url, comments: $comments, resolution: $resolution}')
+
+                    cache_set "comments_data_${topic}" "$data"
+
+                    # Also cache unresolved count for status display
+                    local unresolved_count
+                    unresolved_count=$(echo "$resolution_status" | jq '[to_entries[] | select(.value == false)] | length')
+                    cache_set "comments_${topic}" "$unresolved_count"
+                fi
+            fi
+        ) &>/dev/null &
+    done <<< "$pr_data"
+
+    # Don't wait - let background jobs complete on their own
+}
+
+# Alias for backwards compatibility
+prefetch_status_all() {
+    prefetch_all_pr_data "$@"
 }
