@@ -41,6 +41,7 @@ usage() {
   echo "  -br <topic> <#>    Retry a buildkite job"
   echo "  -brf <topic>       Retry all failed jobs"
   echo "  -bcon <topic> <#> [-n N]  Show last N lines of job output (default 10)"
+  echo "  -y, --yank         Copy PR title and URL to clipboard"
   echo "  -u, --user USER    Use a different user (default: you)"
   echo "  -h, --help         Show this help"
   echo ""
@@ -71,6 +72,7 @@ usage() {
   echo "  prs --closed       # Show recent closed PRs"
   echo "  prs --merged       # Show recent merged PRs"
   echo "  prs --open yaml    # Reopen 'yaml' PR"
+  echo "  prs -y yaml        # Show 'yaml' PR and copy title+URL to clipboard"
   exit 0
 }
 
@@ -78,6 +80,7 @@ usage() {
 MODE="outstanding"
 TOPIC=""
 EXTRA_ARGS=()
+COPY_TO_CLIPBOARD=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -182,6 +185,10 @@ while [[ $# -gt 0 ]]; do
     MODE="merged"
     shift
     ;;
+  -y | --yank)
+    COPY_TO_CLIPBOARD=true
+    shift
+    ;;
   -u | --user)
     GITHUB_USER="$2"
     BRANCH_USER="$2"
@@ -219,6 +226,9 @@ done
 if [[ "$MODE" == "outstanding" && -n "$TOPIC" ]]; then
   MODE="status"
 fi
+
+# Export for mode scripts
+export COPY_TO_CLIPBOARD
 
 # Source and run mode
 source "$SCRIPT_DIR/prs.d/mode_${MODE}.sh"
