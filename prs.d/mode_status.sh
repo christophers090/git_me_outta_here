@@ -57,10 +57,10 @@ _copy_pr_to_clipboard() {
     _copy_to_clipboard "$number" "$title" "$url" "$ci_status" "$review_ok"
 }
 
-# Fetch PR JSON for a topic
+# Fetch PR JSON for a topic (always fresh, bypasses cache)
 _fetch_status_json() {
     local topic="$1"
-    cached_find_pr "$topic" "all" "$_STATUS_FIELDS"
+    find_pr "$topic" "all" "$_STATUS_FIELDS"
 }
 
 # Render status from PR JSON

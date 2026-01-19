@@ -43,3 +43,58 @@ Edit `prs.d/config.sh` to change defaults:
 - `GITHUB_USER` - Your GitHub username
 - `BRANCH_USER` - Your branch prefix (e.g., `firstname.lastname`)
 - `REPO` - Target repository
+
+## Installation Guide
+
+### 1. Install Dependencies
+
+**macOS:**
+```bash
+brew install gh jq
+brew install buildkite/buildkite/bk
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install gh jq
+```
+
+**Buildkite CLI:** https://buildkite.com/docs/platform/cli/installation
+
+### 2. Authenticate CLIs
+
+**GitHub CLI:**
+```bash
+gh auth login
+```
+Follow prompts to authenticate via browser.
+
+**Buildkite CLI:**
+```bash
+bk configure
+```
+You'll need a Buildkite API token:
+1. Go to https://buildkite.com/user/api-access-tokens
+2. Click "New API Access Token"
+3. Select scopes: `read_builds`, `write_builds`, `read_pipelines`
+4. Copy the token and paste when prompted
+
+### 3. Run Install Script
+
+```bash
+git clone <repo-url>
+cd "$(basename "$_" .git)"
+./install.sh
+```
+
+The script will:
+- Verify dependencies and authentication
+- Create symlinks in `~/bin`
+- Prompt for your config (GitHub username, branch prefix, target repo)
+- Optionally enable tab completion
+
+After install:
+```bash
+source ~/.bashrc
+prs --help
+```

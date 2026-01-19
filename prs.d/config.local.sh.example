@@ -4,4 +4,5 @@
 export GITHUB_USER="your-github-username"
 export BRANCH_USER="your.name"
 export PRS_REPO="owner/repo"
+export BK_ORG="your-buildkite-org"
 export PRS_CI_CHECK_CONTEXT="buildkite/your-pipeline"
