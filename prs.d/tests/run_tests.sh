@@ -7,11 +7,8 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRS_DIR="$(dirname "$TESTS_DIR")"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Source colors from config (single source of truth)
+source "$PRS_DIR/config.sh"
 
 # Counters
 PASS=0

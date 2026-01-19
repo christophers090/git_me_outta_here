@@ -4,59 +4,6 @@
 # Fields needed for status display
 _STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft"
 
-# Copy title and URL to clipboard
-_copy_to_clipboard() {
-    local number="$1"
-    local title="$2"
-    local url="$3"
-    local ci_status="$4"
-    local review_ok="$5"
-
-    local ci_sym="✗"
-    local review_sym="✗"
-    [[ "$ci_status" == "pass" ]] && ci_sym="✓"
-    [[ "$ci_status" == "pending" ]] && ci_sym="●"
-    [[ "$review_ok" == "true" ]] && review_sym="✓"
-
-    local text="${ci_sym}|${review_sym} #${number}: ${title}
-${url}"
-
-    if command -v xsel &>/dev/null; then
-        echo -n "$text" | xsel --clipboard --input
-        echo -e "${GREEN}Copied${NC}"
-    elif command -v xclip &>/dev/null; then
-        # xclip forks and holds clipboard data - just let it run
-        echo -n "$text" | xclip -selection clipboard
-        echo -e "${GREEN}Copied${NC}"
-    elif command -v wl-copy &>/dev/null; then
-        echo -n "$text" | wl-copy
-        echo -e "${GREEN}Copied${NC}"
-    else
-        echo -e "${RED}No clipboard tool found${NC}" >&2
-    fi
-}
-
-# Copy PR data to clipboard from JSON (returns 0 if copied, 1 otherwise)
-_copy_pr_to_clipboard() {
-    local pr_json="$1"
-
-    local number title url ci_status review_ok
-
-    # Extract each field separately to avoid read issues
-    number=$(echo "$pr_json" | jq -r '.[0].number')
-    title=$(echo "$pr_json" | jq -r '.[0].title')
-    url=$(echo "$pr_json" | jq -r '.[0].url')
-    ci_status=$(echo "$pr_json" | jq -r --arg ci_ctx "$CI_CHECK_CONTEXT" '.[0] |
-        ([(.statusCheckRollup // [])[] | select(.context | startswith($ci_ctx))] |
-            if length == 0 then "pass"
-            elif ([.[] | select(.state == "FAILURE" or .state == "ERROR")] | length > 0) then "fail"
-            elif ([.[] | select(.state == "PENDING")] | length > 0) then "pending"
-            else "pass" end)')
-    review_ok=$(echo "$pr_json" | jq -r '.[0].reviewDecision == "APPROVED"')
-
-    _copy_to_clipboard "$number" "$title" "$url" "$ci_status" "$review_ok"
-}
-
 # Fetch PR JSON for a topic (always fresh, bypasses cache)
 _fetch_status_json() {
     local topic="$1"
@@ -266,7 +213,7 @@ run_status() {
             pr_exists "$pr_json" && cache_set "$cache_key" "$pr_json"
         fi
         if pr_exists "$pr_json"; then
-            _copy_pr_to_clipboard "$pr_json"
+            copy_pr_to_clipboard "$pr_json"
         else
             echo -e "${RED}No PR found for topic:${NC} $topic"
             return 1

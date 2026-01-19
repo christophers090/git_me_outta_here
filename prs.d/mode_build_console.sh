@@ -7,7 +7,7 @@ run_build_console() {
     shift 2 || true
 
     # Parse -n flag for line count
-    local lines=10
+    local lines=100
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -n)

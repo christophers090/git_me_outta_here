@@ -205,8 +205,3 @@ prefetch_all_pr_data() {
 
     # Don't wait - let background jobs complete on their own
 }
-
-# Alias for backwards compatibility
-prefetch_status_all() {
-    prefetch_all_pr_data "$@"
-}

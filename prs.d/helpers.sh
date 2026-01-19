@@ -115,3 +115,67 @@ open_url() {
         return 1
     }
 }
+
+# Require a comment number argument
+require_comment_num() {
+    local comment_num="$1"
+    local mode_flag="$2"
+    if [[ -z "$comment_num" ]]; then
+        echo -e "${RED}Error:${NC} Comment number required"
+        echo "Usage: prs ${mode_flag} <topic> <#>"
+        return 1
+    fi
+}
+
+# Copy title and URL to clipboard
+copy_to_clipboard() {
+    local number="$1"
+    local title="$2"
+    local url="$3"
+    local ci_status="$4"
+    local review_ok="$5"
+
+    local ci_sym="X"
+    local review_sym="X"
+    [[ "$ci_status" == "pass" ]] && ci_sym="V"
+    [[ "$ci_status" == "pending" ]] && ci_sym="O"
+    [[ "$review_ok" == "true" ]] && review_sym="V"
+
+    local text="${ci_sym}|${review_sym} #${number}: ${title}
+${url}"
+
+    if command -v xsel &>/dev/null; then
+        echo -n "$text" | xsel --clipboard --input
+        echo -e "${GREEN}Copied${NC}"
+    elif command -v xclip &>/dev/null; then
+        # xclip forks and holds clipboard data - just let it run
+        echo -n "$text" | xclip -selection clipboard
+        echo -e "${GREEN}Copied${NC}"
+    elif command -v wl-copy &>/dev/null; then
+        echo -n "$text" | wl-copy
+        echo -e "${GREEN}Copied${NC}"
+    else
+        echo -e "${RED}No clipboard tool found${NC}" >&2
+    fi
+}
+
+# Copy PR data to clipboard from JSON (returns 0 if copied, 1 otherwise)
+copy_pr_to_clipboard() {
+    local pr_json="$1"
+
+    local number title url ci_status review_ok
+
+    # Extract each field separately to avoid read issues
+    number=$(echo "$pr_json" | jq -r '.[0].number')
+    title=$(echo "$pr_json" | jq -r '.[0].title')
+    url=$(echo "$pr_json" | jq -r '.[0].url')
+    ci_status=$(echo "$pr_json" | jq -r --arg ci_ctx "$CI_CHECK_CONTEXT" '.[0] |
+        ([(.statusCheckRollup // [])[] | select(.context | startswith($ci_ctx))] |
+            if length == 0 then "pass"
+            elif ([.[] | select(.state == "FAILURE" or .state == "ERROR")] | length > 0) then "fail"
+            elif ([.[] | select(.state == "PENDING")] | length > 0) then "pending"
+            else "pass" end)')
+    review_ok=$(echo "$pr_json" | jq -r '.[0].reviewDecision == "APPROVED"')
+
+    copy_to_clipboard "$number" "$title" "$url" "$ci_status" "$review_ok"
+}

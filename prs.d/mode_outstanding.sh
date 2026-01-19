@@ -292,7 +292,7 @@ run_outstanding() {
             fi
 
             # Prefetch status for all PRs in background
-            prefetch_status_all "$fresh_json" &
+            prefetch_all_pr_data "$fresh_json" &
         else
             # API failed - just remove the refreshing indicator
             tput cuu 1 2>/dev/null || true
@@ -318,7 +318,7 @@ run_outstanding() {
 
             # Prefetch status in background (only if interactive)
             if is_interactive; then
-                prefetch_status_all "$fresh_json" &
+                prefetch_all_pr_data "$fresh_json" &
             fi
         elif [[ "$fresh_json" == "[]" ]]; then
             echo "No open PRs found for $GITHUB_USER"
