@@ -22,7 +22,6 @@ run_close() {
     echo -e "  ${CYAN}${url}${NC}"
 
     if gh pr close "$number" -R "$REPO"; then
-        echo -e "  ${CHECK} PR closed"
         invalidate_pr_caches "$topic"
         return 0
     else

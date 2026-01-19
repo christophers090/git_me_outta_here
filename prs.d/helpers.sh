@@ -32,6 +32,14 @@ find_pr() {
             2>/dev/null || echo "[]")
     fi
 
+    # If still no results, try searching by topic in PR body
+    if [[ "$(echo "$result" | jq 'length')" -eq 0 ]]; then
+        result=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state "$state" \
+            --json "$fields,body" 2>/dev/null \
+            | jq --arg topic "$topic" '[.[] | select(.body | test("Topic:\\s*" + $topic + "\\b"))] | .[0:1] | map(del(.body))' \
+            2>/dev/null || echo "[]")
+    fi
+
     echo "$result"
 }
 

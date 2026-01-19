@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 # Fields needed for status display
-_STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft"
+_STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft"
 
 # Copy title and URL to clipboard
 _copy_to_clipboard() {
@@ -106,7 +106,7 @@ _render_status() {
         (.reviewDecision // "NONE"),
         (.mergeStateStatus // "UNKNOWN"),
         .isDraft,
-        (if .autoMergeRequest != null then "Yes" else "No" end),
+        "N/A",
         (((.statusCheckRollup // [])[] | select(.context == $ci_ctx) | .targetUrl) // ""),
         ([(.statusCheckRollup // [])[] | select(.state == "SUCCESS")] | length),
         ([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR")] | length),
@@ -115,8 +115,8 @@ _render_status() {
         (([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
         (([(.statusCheckRollup // [])[] | select(.state == "PENDING" or .state == "EXPECTED") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
         ([(.reviewRequests // [])[] | if .name then "@\(.slug // .name)" else "@\(.login)" end] | join(", ")),
-        ([(.latestReviews // [])[] | select(.state == "APPROVED") | "@\(.author.login)"] | join(", ")),
-        ([(.latestReviews // [])[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"] | join(", ")),
+        ([(.reviews // [])[] | select(.state == "APPROVED") | "@\(.author.login)"] | join(", ")),
+        ([(.reviews // [])[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"] | join(", ")),
         (((.labels // [])[] | select(.name | ascii_downcase | contains("merge")) | .name) // "")
     ')
 
@@ -258,6 +258,8 @@ run_status() {
 
     if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && is_interactive; then
         # Have valid cache - render directly to stdout (fast!)
+        # Save cursor position before rendering
+        tput sc 2>/dev/null || true
         _render_status "$cached_json" "$cached_comments"
         echo -e "${DIM}⟳ Refreshing...${NC}"
 
@@ -274,8 +276,9 @@ run_status() {
                 fresh_comments=$(get_unresolved_count "$pr_number")
                 cache_set "$comments_cache_key" "$fresh_comments"
 
-                # Clear and re-render with fresh data
-                tput clear 2>/dev/null || true
+                # Restore cursor and clear to end of screen, then re-render
+                tput rc 2>/dev/null || true
+                tput ed 2>/dev/null || true
                 _render_status "$fresh_json" "$fresh_comments"
                 echo -e "${DIM}↻ Updated${NC}"
             else

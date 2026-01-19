@@ -1,4 +1,4 @@
-# prs merge mode - add PR to merge queue
+# prs merge mode - enable auto-merge on PR
 # shellcheck shell=bash
 
 run_merge() {
@@ -22,20 +22,19 @@ run_merge() {
     # SAFETY: Only allow merging to main
     if [[ "$base" != "main" ]]; then
         echo -e "${RED}ERROR:${NC} PR #${number} targets '${base}', not 'main'"
-        echo -e "  ${DIM}Only PRs targeting main can be added to merge queue${NC}"
+        echo -e "  ${DIM}Only PRs targeting main can be merged${NC}"
         echo -e "  ${DIM}Title: ${title}${NC}"
         return 1
     fi
 
-    echo -e "${BOLD}Adding to merge queue:${NC} #${number} - ${title}"
+    echo -e "${BOLD}Enabling auto-merge:${NC} #${number} - ${title}"
     echo -e "  ${CYAN}${url}${NC}"
 
-    if gh pr merge "$number" -R "$REPO"; then
-        echo -e "  ${CHECK} Added to merge queue"
+    if gh pr merge "$number" -R "$REPO" --rebase --auto; then
         invalidate_pr_caches "$topic"
         return 0
     else
-        echo -e "  ${CROSS} Failed to add to merge queue"
+        echo -e "  ${CROSS} Failed to enable auto-merge"
         return 1
     fi
 }

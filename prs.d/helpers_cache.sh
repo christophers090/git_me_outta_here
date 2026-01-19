@@ -168,7 +168,7 @@ prefetch_all_pr_data() {
                 local status_json
                 status_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state all \
                     --head "$branch_pattern" \
-                    --json number,title,state,url,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,autoMergeRequest,mergeStateStatus,labels,isDraft \
+                    --json number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft \
                     2>/dev/null)
 
                 if [[ -n "$status_json" && "$(echo "$status_json" | jq 'length')" -gt 0 ]]; then

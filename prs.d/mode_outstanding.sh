@@ -121,14 +121,17 @@ _render_outstanding() {
         [[ "$ci_status" == "pending" ]] && ci_sym="${YELLOW}●${NC}"
         [[ "$review_ok" == "true" ]] && review_sym="$CHECK"
 
-        echo -e "${prefix}${ci_sym}|${review_sym} ${BOLD}#${number}:${NC} ${title}"
+        # Hyperlink the PR number (OSC 8 escape sequence with BEL terminator)
+        local pr_link="\e]8;;${url}\a${BLUE}#${number}${NC}\e]8;;\a"
+
+        echo -e "${prefix}${BOLD}${pr_link}:${NC} ${title}"
+        echo -e "${prefix}    CI ${ci_sym} | Reviews ${review_sym}"
         echo -e "${prefix}    ${DIM}Topic:${NC} ${topic}"
         if [[ -n "$relative" && "$relative" != "main" ]]; then
             echo -e "${prefix}    ${DIM}Relative:${NC} ${relative}"
         else
             echo -e "${prefix}    ${DIM}Relative:${NC} (none)"
         fi
-        echo -e "${prefix}    ${CYAN}${url}${NC}"
     }
 
     # Helper: Print chain recursively
