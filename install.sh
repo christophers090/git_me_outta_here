@@ -29,7 +29,13 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     for dep in "${missing[@]}"; do
         echo "  - $dep"
     done
-    echo -e "\nInstall these first, then re-run this script."
+    echo ""
+    if [[ " ${missing[*]} " == *"bk"* ]]; then
+        echo "Install bk (Buildkite CLI) from:"
+        echo "  https://buildkite.com/docs/platform/cli/installation"
+        echo ""
+    fi
+    echo "Install missing dependencies, then re-run this script."
     exit 1
 fi
 

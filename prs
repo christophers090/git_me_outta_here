@@ -22,7 +22,7 @@ usage() {
   echo "  -f, --files        List changed files in a PR"
   echo "  -m, --merge        Add PR to merge queue (must target main)"
   echo "  -rq                Remove PR from merge queue"
-  echo "  -qs                Show all PRs in merge queue"
+  echo "  -q, -qs            Show all PRs in merge queue"
   echo "  -c, --comments     Show unresolved comments on a PR"
   echo "  -csr               Show all comments including resolved"
   echo "  -cr <topic> <#>    Reply to comment #"
@@ -68,7 +68,7 @@ usage() {
   echo "  prs -bcon my_feature 7   # Show last 10 lines of job #7 output"
   echo "  prs -bcon my_feature 7 -n 50  # Show last 50 lines"
   echo "  prs -rq my_feature      # Remove 'my_feature' PR from merge queue"
-  echo "  prs -qs            # Show all PRs in merge queue"
+  echo "  prs -q             # Show all PRs in merge queue"
   echo "  prs --closed       # Show recent closed PRs"
   echo "  prs --merged       # Show recent merged PRs"
   echo "  prs --open my_feature   # Reopen 'my_feature' PR"
@@ -174,7 +174,7 @@ while [[ $# -gt 0 ]]; do
     MODE="remove_queue"
     shift
     ;;
-  -qs)
+  -q|-qs)
     MODE="queue_status"
     shift
     ;;
