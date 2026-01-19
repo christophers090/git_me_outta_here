@@ -15,7 +15,7 @@ run_comment_reply_resolve() {
 
     # Show prompt immediately, do lookups in background
     echo -e "${BOLD}Reply to comment #${comment_num}${NC}"
-    echo -e "${DIM}Enter your reply (Ctrl+D when done):${NC}"
+    echo -e "${DIM}Enter your reply (press Enter, then Ctrl+D when done):${NC}"
 
     # Start PR lookup in background
     local tmp_file
@@ -39,6 +39,7 @@ run_comment_reply_resolve() {
     # Collect reply while lookup happens
     local reply_body
     reply_body=$(cat)
+    echo ""  # Ensure newline after input before status messages
 
     if [[ -z "$reply_body" ]]; then
         kill "$bg_pid" 2>/dev/null

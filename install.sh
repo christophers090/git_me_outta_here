@@ -46,6 +46,12 @@ echo -e "${GREEN}✓${NC} GitHub CLI authenticated"
 
 if ! bk whoami &>/dev/null; then
     echo -e "${RED}✗${NC} Buildkite CLI not authenticated. Run: bk configure"
+    echo ""
+    echo "  You'll need an API token from:"
+    echo "  https://buildkite.com/user/api-access-tokens"
+    echo ""
+    echo "  1. Required scopes: read_builds, write_builds, read_pipelines, read_artifacts, read_build_logs, graphql"
+    echo "  2. Organization Access: MUST select your org!"
     exit 1
 fi
 echo -e "${GREEN}✓${NC} Buildkite CLI authenticated"
@@ -108,7 +114,7 @@ fi
 
 read -p "Branch prefix (e.g., firstname.lastname): " branch_user
 
-read -p "Target repo (e.g., owner/repo from github.com/<owner>/<repo>): " prs_repo
+read -p "Target repo (e.g., \"owner/repo\" from github.com/<owner>/<repo>): " prs_repo
 
 if [[ -n "$default_bk_org" ]]; then
     read -p "Buildkite org slug: $default_bk_org - correct? [Y/n] " -n 1 -r
@@ -122,7 +128,12 @@ else
     read -p "Buildkite org slug: " bk_org
 fi
 
-read -p "CI check context (e.g., buildkite/pipeline): " ci_context
+# Set bk org globally so it works from any directory
+sed -i "s/selected_org: .*/selected_org: $bk_org/" ~/.config/bk.yaml 2>/dev/null
+echo -e "${GREEN}✓${NC} Buildkite org set to: $bk_org"
+
+read -p "Buildkite pipeline (e.g., my-pipeline): " bk_pipeline
+ci_context="buildkite/${bk_pipeline}"
 
 # Write config
 cat > "$CONFIG_FILE" << EOF
@@ -152,4 +163,21 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
 fi
 
 echo -e "\n${GREEN}Installation complete!${NC}"
-echo "Run 'source ~/.bashrc' then try 'prs --help'"
+echo "Run 'source ~/.bashrc' then try:"
+echo ""
+echo -e "${BOLD}Quick Start:${NC}"
+echo ""
+echo "  prs                  # List your open PRs"
+echo "    ✓|✓ #123 my_feature    Add new feature"
+echo "    ✗|✓ #124 fix_bug       Fix login bug"
+echo ""
+echo "  prs my_feature       # Show status of a PR"
+echo "    PR #123: Add new feature"
+echo "    CI: ✓  Reviews: ✓  Merge: Ready"
+echo ""
+echo "  prs -b my_feature    # Show build steps"
+echo "    1. ✓ lint"
+echo "    2. ✓ test"
+echo "    3. ✗ deploy"
+echo ""
+echo -e "${BOLD}TL;DR:${NC} ✓|✓ = CI|Reviews   ✓=pass ✗=fail ●=pending"

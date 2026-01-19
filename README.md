@@ -76,8 +76,9 @@ bk configure
 You'll need a Buildkite API token:
 1. Go to https://buildkite.com/user/api-access-tokens
 2. Click "New API Access Token"
-3. Select scopes: `read_builds`, `write_builds`, `read_pipelines`
-4. Copy the token and paste when prompted
+3. Select scopes: `read_builds`, `write_builds`, `read_pipelines`, `read_artifacts`, `read_build_logs`, `graphql`
+4. Under "Organization Access", select your org
+5. Copy the token and paste when prompted
 
 ### 3. Run Install Script
 

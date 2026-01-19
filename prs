@@ -36,7 +36,7 @@ usage() {
   echo "  --merged           Show recent merged PRs"
   echo "  -w, --web          Open GitHub PR in browser"
   echo "  -bw                Open Buildkite CI in browser"
-  echo "  -bs                Show build steps status"
+  echo "  -b, -bs            Show build steps status"
   echo "  -bc <topic> <#>    Cancel a buildkite job"
   echo "  -br <topic> <#>    Retry a buildkite job"
   echo "  -brf <topic>       Retry all failed jobs"
@@ -61,7 +61,7 @@ usage() {
   echo "  prs --close my_feature  # Close 'my_feature' PR"
   echo "  prs -w my_feature       # Open 'my_feature' PR on GitHub"
   echo "  prs -bw my_feature      # Open Buildkite for 'my_feature' PR"
-  echo "  prs -bs my_feature      # Show build steps for 'my_feature' PR"
+  echo "  prs -b my_feature       # Show build steps for 'my_feature' PR"
   echo "  prs -bc my_feature 7     # Cancel job #7 for 'my_feature' PR"
   echo "  prs -br my_feature 7     # Retry job #7 for 'my_feature' PR"
   echo "  prs -brf my_feature     # Retry all failed jobs for 'my_feature' PR"
@@ -77,7 +77,7 @@ usage() {
   echo -e "${BOLD}Quick Start:${NC}"
   echo "  prs                     # List your open PRs"
   echo "  prs my_feature          # Show status of a PR"
-  echo "  prs -bs my_feature      # Show build steps"
+  echo "  prs -b my_feature       # Show build steps"
   exit 0
 }
 
@@ -150,7 +150,7 @@ while [[ $# -gt 0 ]]; do
     MODE="buildkite"
     shift
     ;;
-  -bs)
+  -b | -bs)
     MODE="build_steps"
     shift
     ;;

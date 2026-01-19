@@ -118,10 +118,16 @@ run_comments() {
 
     if [[ -n "$cached_data" ]] && is_interactive; then
         # Have cache - render directly to terminal (fast!)
-        tput sc 2>/dev/null || true  # Save cursor position
-        _render_comments "$cached_data" "$show_resolved" "true"
+        # Capture output to count lines for reliable cursor movement
+        local cached_output
+        cached_output=$(_render_comments "$cached_data" "$show_resolved" "true")
+        echo "$cached_output"
         echo ""
         echo -e "${DIM}⟳ Refreshing...${NC}"
+
+        # Count lines rendered (add 2 for blank line and "Refreshing..." line)
+        local line_count
+        line_count=$(($(echo "$cached_output" | wc -l) + 2))
 
         # Get PR info from cache for refresh
         local number title url
@@ -140,8 +146,8 @@ run_comments() {
 
             # Compare JSON to detect changes (faster than comparing rendered output)
             if [[ "$fresh_data" != "$cached_data" ]]; then
-                # Data changed - restore cursor and re-render
-                tput rc 2>/dev/null || true
+                # Data changed - move up by line count, clear, and re-render
+                tput cuu "$line_count" 2>/dev/null || true
                 tput ed 2>/dev/null || true
                 _render_comments "$fresh_data" "$show_resolved" "true"
                 echo ""
