@@ -64,10 +64,11 @@ _fetch_status_json() {
 }
 
 # Render status from PR JSON
-# If cached_comment_count is provided, use it; otherwise fetch fresh
+# cached_comment_count and cached_auto_merge avoid slow API calls when displaying cached data
 _render_status() {
     local pr_json="$1"
     local cached_comment_count="${2:-}"
+    local cached_auto_merge="${3:-}"
 
     if ! pr_exists "$pr_json"; then
         return 1
@@ -93,7 +94,9 @@ _render_status() {
         read -r ci_pending
         read -r ci_total
         IFS= read -r -d $'\x1e' ci_failed_names
+        read -r  # consume trailing newline after \x1e
         IFS= read -r -d $'\x1e' ci_pending_names
+        read -r  # consume trailing newline after \x1e
         read -r pending_reviewers
         read -r approvers
         read -r change_requesters
@@ -106,7 +109,7 @@ _render_status() {
         (.reviewDecision // "NONE"),
         (.mergeStateStatus // "UNKNOWN"),
         .isDraft,
-        "N/A",
+        "",
         (((.statusCheckRollup // [])[] | select(.context == $ci_ctx) | .targetUrl) // ""),
         ([(.statusCheckRollup // [])[] | select(.state == "SUCCESS")] | length),
         ([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR")] | length),
@@ -115,8 +118,8 @@ _render_status() {
         (([(.statusCheckRollup // [])[] | select(.state == "FAILURE" or .state == "ERROR") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
         (([(.statusCheckRollup // [])[] | select(.state == "PENDING" or .state == "EXPECTED") | "    \(.context // .name)"] | join("\n")) + "\u001e"),
         ([(.reviewRequests // [])[] | if .name then "@\(.slug // .name)" else "@\(.login)" end] | join(", ")),
-        ([(.reviews // [])[] | select(.state == "APPROVED") | "@\(.author.login)"] | join(", ")),
-        ([(.reviews // [])[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"] | join(", ")),
+        ([(.reviews // []) | group_by(.author.login)[] | sort_by(.submittedAt) | last] | [.[] | select(.state == "APPROVED") | "@\(.author.login)"] | join(", ")),
+        ([(.reviews // []) | group_by(.author.login)[] | sort_by(.submittedAt) | last] | [.[] | select(.state == "CHANGES_REQUESTED") | "@\(.author.login)"] | join(", ")),
         (((.labels // [])[] | select(.name | ascii_downcase | contains("merge")) | .name) // "")
     ')
 
@@ -150,7 +153,19 @@ _render_status() {
 
     # Reviews section
     echo -e "${BOLD}Reviews:${NC}"
-    case "$review_decision" in
+
+    # Derive effective review status when GitHub's reviewDecision is empty/NONE
+    # (can happen when PR has approvals but also unresolved comments)
+    local effective_status="$review_decision"
+    if [[ -z "$effective_status" || "$effective_status" == "NONE" ]]; then
+        if [[ -n "$change_requesters" ]]; then
+            effective_status="CHANGES_REQUESTED"
+        elif [[ -n "$approvers" ]]; then
+            effective_status="APPROVED"
+        fi
+    fi
+
+    case "$effective_status" in
         "APPROVED")
             echo -e "  Status: ${GREEN}APPROVED${NC}"
             ;;
@@ -161,17 +176,19 @@ _render_status() {
             echo -e "  Status: ${YELLOW}REVIEW REQUIRED${NC}"
             ;;
         *)
-            echo -e "  Status: ${review_decision}"
+            echo -e "  Status: ${effective_status:-No reviews}"
             ;;
     esac
 
     if [[ -n "$pending_reviewers" ]]; then
         echo -e "  Pending: ${YELLOW}${pending_reviewers}${NC}"
     fi
-    if [[ -n "$approvers" ]]; then
+    # Only show approvers when PR is approved (hides stale approvals from before latest push)
+    if [[ -n "$approvers" && "$effective_status" == "APPROVED" ]]; then
         echo -e "  Approved by: ${GREEN}${approvers}${NC}"
     fi
-    if [[ -n "$change_requesters" ]]; then
+    # Only show change requesters when that's the actual current state
+    if [[ -n "$change_requesters" && "$effective_status" == "CHANGES_REQUESTED" ]]; then
         echo -e "  Changes requested by: ${RED}${change_requesters}${NC}"
     fi
 
@@ -211,7 +228,15 @@ _render_status() {
             echo -e "  State: ${merge_state}"
             ;;
     esac
-    echo -e "  Merge-when-ready: ${auto_merge}"
+    # Use cached auto-merge status (avoids slow API call)
+    # Values: "true", "false", or empty (unknown/not yet fetched)
+    local auto_merge_status
+    case "$cached_auto_merge" in
+        "true")  auto_merge_status="${GREEN}Enabled${NC}" ;;
+        "false") auto_merge_status="Disabled" ;;
+        *)       auto_merge_status="${DIM}...${NC}" ;;  # Will be fetched with fresh data
+    esac
+    echo -e "  Merge-when-ready: ${auto_merge_status}"
     if [[ -n "$merge_label" ]]; then
         echo -e "  Label: ${CYAN}${merge_label}${NC}"
     fi
@@ -251,19 +276,28 @@ run_status() {
 
     local cache_key="status_${topic}"
     local comments_cache_key="comments_${topic}"
-    local cached_json fresh_json cached_comments
+    local automerge_cache_key="automerge_${topic}"
+    local cached_json fresh_json cached_comments cached_automerge
 
     cached_json=$(cache_get "$cache_key")
     cached_comments=$(cache_get "$comments_cache_key")
+    cached_automerge=$(cache_get "$automerge_cache_key")
 
-    if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && is_interactive; then
-        # Have valid cache - render directly to stdout (fast!)
-        # Save cursor position before rendering
-        tput sc 2>/dev/null || true
-        _render_status "$cached_json" "$cached_comments"
+    # Don't use cached data if PR is already merged (stale cache from different PR)
+    local cached_state
+    cached_state=$(echo "$cached_json" | jq -r '.[0].state // empty' 2>/dev/null)
+
+    if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && [[ "$cached_state" != "MERGED" ]] && is_interactive; then
+        # Have valid cache - render to variable first, count lines, then display
+        local cached_output line_count
+        cached_output=$(_render_status "$cached_json" "$cached_comments" "$cached_automerge")
+        line_count=$(($(echo "$cached_output" | wc -l) + 1))  # +1 for "Refreshing..." line
+
+        # Display cached output
+        echo "$cached_output"
         echo -e "${DIM}⟳ Refreshing...${NC}"
 
-        # Fetch fresh data in background-ish (user sees cached immediately)
+        # Fetch fresh data (user sees cached immediately)
         fresh_json=$(_fetch_status_json "$topic")
 
         if pr_exists "$fresh_json"; then
@@ -271,15 +305,17 @@ run_status() {
             if [[ "$fresh_json" != "$cached_json" ]] || [[ -z "$cached_comments" ]]; then
                 cache_set "$cache_key" "$fresh_json"
 
-                local pr_number fresh_comments
+                local pr_number fresh_comments fresh_automerge
                 pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
                 fresh_comments=$(get_unresolved_count "$pr_number")
+                fresh_automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
                 cache_set "$comments_cache_key" "$fresh_comments"
+                cache_set "$automerge_cache_key" "$fresh_automerge"
 
-                # Restore cursor and clear to end of screen, then re-render
-                tput rc 2>/dev/null || true
+                # Move cursor up by line_count, clear to end of screen, re-render
+                tput cuu "$line_count" 2>/dev/null || true
                 tput ed 2>/dev/null || true
-                _render_status "$fresh_json" "$fresh_comments"
+                _render_status "$fresh_json" "$fresh_comments" "$fresh_automerge"
                 echo -e "${DIM}↻ Updated${NC}"
             else
                 # Just update the refreshing line
@@ -306,13 +342,15 @@ run_status() {
         if pr_exists "$fresh_json"; then
             cache_set "$cache_key" "$fresh_json"
 
-            # Fetch comment count and cache it
-            local pr_number fresh_comments
+            # Fetch comment count and auto-merge status, then cache
+            local pr_number fresh_comments fresh_automerge
             pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
             fresh_comments=$(get_unresolved_count "$pr_number")
+            fresh_automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
             cache_set "$comments_cache_key" "$fresh_comments"
+            cache_set "$automerge_cache_key" "$fresh_automerge"
 
-            _render_status "$fresh_json" "$fresh_comments"
+            _render_status "$fresh_json" "$fresh_comments" "$fresh_automerge"
         else
             echo -e "${RED}No PR found for topic:${NC} $topic"
             echo ""

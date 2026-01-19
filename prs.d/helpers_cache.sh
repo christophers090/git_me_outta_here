@@ -162,17 +162,16 @@ prefetch_all_pr_data() {
 
         # Spawn background job for this PR
         (
-            # Prefetch status if needed
+            # Prefetch status if needed - use PR number directly for accurate lookup
             if [[ -n "$need_status" ]]; then
-                local branch_pattern="${BRANCH_USER}/${BRANCH_PREFIX}/${topic}"
                 local status_json
-                status_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state all \
-                    --head "$branch_pattern" \
+                status_json=$(gh pr view "$number" -R "$REPO" \
                     --json number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft \
                     2>/dev/null)
 
-                if [[ -n "$status_json" && "$(echo "$status_json" | jq 'length')" -gt 0 ]]; then
-                    cache_set "status_${topic}" "$status_json"
+                if [[ -n "$status_json" ]]; then
+                    # Wrap in array to match expected format
+                    cache_set "status_${topic}" "[$status_json]"
                 fi
             fi
 
