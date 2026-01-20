@@ -22,6 +22,9 @@ cache_get() {
 
 # Save data to cache
 cache_set() {
+    # Skip caching if NO_CACHE is set (e.g., when using -u flag)
+    [[ -n "${NO_CACHE:-}" ]] && return 0
+
     local key="$1"
     local data="$2"
     cache_init
@@ -32,6 +35,9 @@ cache_set() {
 # Check if cache is fresh (within TTL)
 # Returns: 0 if fresh, 1 if stale/missing
 cache_is_fresh() {
+    # Never use cache if NO_CACHE is set (e.g., when using -u flag)
+    [[ -n "${NO_CACHE:-}" ]] && return 1
+
     local key="$1"
     local ttl="$2"
     local ts_file="$CACHE_DIR/${key}.ts"
@@ -137,9 +143,10 @@ stop_spinner() {
 prefetch_all_pr_data() {
     local prs_json="$1"
 
-    # Don't prefetch if non-interactive or no data
+    # Don't prefetch if non-interactive, no data, or NO_CACHE is set
     is_interactive || return 0
     [[ -n "$prs_json" ]] || return 0
+    [[ -n "${NO_CACHE:-}" ]] && return 0
 
     # Extract topics and PR numbers from JSON
     local pr_data

@@ -54,7 +54,7 @@ usage() {
   echo "  -bcon <topic> <#> -n N   Show last N lines of console output"
   echo ""
   echo -e "${BOLD}Other Options${NC}"
-  echo "  -u, --user <username>    Query PRs for a different GitHub user"
+  echo "  -u, --user <username>    Query PRs for a different GitHub user (disables cache)"
   echo "  -h, --help               Show this help message"
   echo ""
   echo -e "${BOLD}Examples${NC}"
@@ -191,6 +191,7 @@ while [[ $# -gt 0 ]]; do
   -u | --user)
     GITHUB_USER="$2"
     BRANCH_USER="$2"
+    NO_CACHE=1
     shift 2
     ;;
   -h | --help)
@@ -233,6 +234,7 @@ fi
 
 # Export for mode scripts
 export COPY_TO_CLIPBOARD
+export NO_CACHE
 
 # Source and run mode
 source "$SCRIPT_DIR/prs.d/mode_${MODE}.sh"
