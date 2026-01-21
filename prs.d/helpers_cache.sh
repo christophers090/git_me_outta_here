@@ -156,6 +156,11 @@ fetch_with_spinner() {
     fi
 }
 
+# Hook globals for display_with_refresh customization
+# Set these before calling display_with_refresh(), reset to "" after
+DISPLAY_EARLY_EXIT_FN=""    # Called first; return 0 to exit early (e.g., yank mode)
+DISPLAY_NOT_FOUND_FN=""     # Called when data is empty (e.g., "similar topics" suggestions)
+
 # Display cached data immediately, refresh in background, update display if changed
 # This is the standard "show cached, then refresh" pattern used by multiple modes.
 #
@@ -167,6 +172,10 @@ fetch_with_spinner() {
 #   $5 - post_cache_fn: optional function to run after caching (called with fresh data as arg)
 #   $6 - empty_check: optional expression to check if data is empty (default: checks for empty string or "[]")
 #
+# Hooks (set via globals before calling):
+#   DISPLAY_EARLY_EXIT_FN - if set and returns 0, exits immediately (for special modes like yank)
+#   DISPLAY_NOT_FOUND_FN - if set, called instead of generic error when data empty
+#
 # Returns: 0 on success, 1 on failure
 # Sets: DISPLAY_REFRESH_DATA to the final data (for caller to use if needed)
 display_with_refresh() {
@@ -176,6 +185,13 @@ display_with_refresh() {
     local spinner_msg="$4"
     local post_cache_fn="${5:-}"
     local empty_check="${6:-}"
+
+    # Early exit hook (e.g., yank mode)
+    if [[ -n "$DISPLAY_EARLY_EXIT_FN" ]]; then
+        if "$DISPLAY_EARLY_EXIT_FN"; then
+            return 0
+        fi
+    fi
 
     local cached_data fresh_data
     cached_data=$(cache_get "$cache_key")
@@ -262,7 +278,12 @@ display_with_refresh() {
             "$render_fn" "$fresh_data"
             DISPLAY_REFRESH_DATA="$fresh_data"
         else
-            echo -e "${RED}Failed to fetch data${NC}" >&2
+            # Data not found - use custom handler or generic error
+            if [[ -n "$DISPLAY_NOT_FOUND_FN" ]]; then
+                "$DISPLAY_NOT_FOUND_FN"
+            else
+                echo -e "${RED}Failed to fetch data${NC}" >&2
+            fi
             return 1
         fi
     fi

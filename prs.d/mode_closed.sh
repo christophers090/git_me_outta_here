@@ -1,10 +1,17 @@
 # prs closed mode - show recent closed (not merged) PRs
 # shellcheck shell=bash
 
+# Module-level state for render function
+_CLOSED_LIMIT=10
+
+_fetch_closed() {
+    gh pr list -R "$REPO" --author "$GITHUB_USER" --state closed --limit 50 \
+        --json number,title,url,headRefName,closedAt,mergedAt
+}
+
 _render_closed() {
     local prs_json="$1"
-    local limit="$2"
-    echo "$prs_json" | jq -r --argjson limit "$limit" '[.[] | select(.mergedAt == null)] | .[0:$limit] | .[] | (.headRefName | split("/") | last) as $topic | "\(.number)|\(.title)|\(.url)|\($topic)"' \
+    echo "$prs_json" | jq -r --argjson limit "$_CLOSED_LIMIT" '[.[] | select(.mergedAt == null)] | .[0:$limit] | .[] | (.headRefName | split("/") | last) as $topic | "\(.number)|\(.title)|\(.url)|\($topic)"' \
         | while IFS='|' read -r number title url topic; do
             [[ -z "$number" ]] && continue
             echo -e "${CROSS} ${BOLD}#${number}:${NC} ${title}"
@@ -17,22 +24,10 @@ _render_closed() {
 run_closed() {
     local limit="${1:-10}"
     [[ ! "$limit" =~ ^[0-9]+$ ]] && limit=10
-
-    local cache_key="closed"
-    local prs_json
+    _CLOSED_LIMIT="$limit"
 
     echo -e "${BOLD}Recent closed PRs (not merged):${NC}"
     echo ""
 
-    if cache_is_fresh "$cache_key" "$CACHE_TTL_CLOSED"; then
-        prs_json=$(cache_get "$cache_key")
-        _render_closed "$prs_json" "$limit"
-    else
-        prs_json=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state closed --limit 50 \
-            --json number,title,url,headRefName,closedAt,mergedAt)
-        if [[ -n "$prs_json" && "$prs_json" != "[]" ]]; then
-            cache_set "$cache_key" "$prs_json"
-        fi
-        _render_closed "$prs_json" "$limit"
-    fi
+    display_with_refresh "closed" "_fetch_closed" "_render_closed" "Fetching closed PRs..."
 }

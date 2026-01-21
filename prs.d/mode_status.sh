@@ -4,22 +4,92 @@
 # Fields needed for status display
 _STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft"
 
-# Fetch PR JSON for a topic (always fresh, bypasses cache)
-_fetch_status_json() {
-    local topic="$1"
-    find_pr "$topic" "all" "$_STATUS_FIELDS"
+# Module-level state
+_STATUS_TOPIC=""
+
+# Fetch PR JSON for a topic
+_fetch_status() {
+    find_pr "$_STATUS_TOPIC" "all" "$_STATUS_FIELDS"
+}
+
+# Check if status data is empty/invalid
+_status_is_empty() {
+    local data="$1"
+    [[ -z "$data" ]] || ! pr_exists "$data"
+}
+
+# Early exit hook for yank mode - copies URL and exits
+_status_early_exit() {
+    [[ "$COPY_TO_CLIPBOARD" != "true" ]] && return 1
+
+    local pr_json
+    pr_json=$(cache_get "status_${_STATUS_TOPIC}")
+    if [[ -z "$pr_json" ]] || ! pr_exists "$pr_json"; then
+        pr_json=$(_fetch_status)
+        pr_exists "$pr_json" && cache_set "status_${_STATUS_TOPIC}" "$pr_json"
+    fi
+    if pr_exists "$pr_json"; then
+        copy_pr_to_clipboard "$pr_json"
+        return 0
+    else
+        pr_not_found "$_STATUS_TOPIC"
+        return 0  # Still exit early, but with error shown
+    fi
+}
+
+# Not-found hook - shows similar topics or lists all PRs
+_status_not_found() {
+    pr_not_found "$_STATUS_TOPIC"
+    echo ""
+
+    # Try to find similar topics (use outstanding cache if available)
+    local similar outstanding_data
+    if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
+        outstanding_data=$(cache_get "outstanding")
+    else
+        outstanding_data=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null)
+    fi
+    similar=$(echo "$outstanding_data" | jq -r --arg topic "$_STATUS_TOPIC" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
+
+    if [[ -n "$similar" ]]; then
+        echo -e "${YELLOW}Similar topics:${NC}"
+        echo "$similar"
+    else
+        echo -e "${BOLD}Your open PRs:${NC}"
+        if [[ -n "$outstanding_data" ]]; then
+            echo "$outstanding_data" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
+        else
+            gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+        fi
+    fi
+}
+
+# Fetch and cache extra status data (comments + automerge) after getting PR JSON
+_post_cache_status() {
+    local pr_json="$1"
+    local pr_number comments automerge
+
+    pr_number=$(echo "$pr_json" | jq -r '.[0].number')
+    comments=$(get_unresolved_count "$pr_number")
+    automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
+
+    cache_set "comments_${_STATUS_TOPIC}" "$comments"
+    cache_set "automerge_${_STATUS_TOPIC}" "$automerge"
 }
 
 # Render status from PR JSON
-# cached_comment_count and cached_auto_merge avoid slow API calls when displaying cached data
+# Reads comments/automerge from cache (set by _post_cache_status or from previous runs)
 _render_status() {
     local pr_json="$1"
-    local cached_comment_count="${2:-}"
-    local cached_auto_merge="${3:-}"
 
     if ! pr_exists "$pr_json"; then
         return 1
     fi
+
+    # Read cached extras (may be empty on first render before post_cache runs)
+    local cached_comment_count cached_auto_merge
+    cached_comment_count=$(cache_get "comments_${_STATUS_TOPIC}")
+    cached_auto_merge=$(cache_get "automerge_${_STATUS_TOPIC}")
 
     # Extract ALL data in ONE jq call - output as newline-separated for read
     local number title state url review_decision merge_state is_draft auto_merge buildkite_url
@@ -139,7 +209,7 @@ _render_status() {
         echo -e "  Changes requested by: ${RED}${change_requesters}${NC}"
     fi
 
-    # Show unresolved comments (use cached if provided, otherwise fetch)
+    # Show unresolved comments (use cached if available, otherwise show placeholder)
     local unresolved_count
     if [[ -n "$cached_comment_count" ]]; then
         unresolved_count="$cached_comment_count"
@@ -175,7 +245,7 @@ _render_status() {
             echo -e "  State: ${merge_state}"
             ;;
     esac
-    # Use cached auto-merge status (avoids slow API call)
+    # Use cached auto-merge status
     # Values: "true", "false", or empty (unknown/not yet fetched)
     local auto_merge_status
     case "$cached_auto_merge" in
@@ -189,138 +259,42 @@ _render_status() {
     fi
 }
 
-# Fetch and cache extra status data (comments + automerge) after getting PR JSON
-_fetch_status_extras() {
-    local pr_json="$1"
-    local topic="$2"
-    local pr_number comments automerge
-
-    pr_number=$(echo "$pr_json" | jq -r '.[0].number')
-    comments=$(get_unresolved_count "$pr_number")
-    automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
-
-    cache_set "comments_${topic}" "$comments"
-    cache_set "automerge_${topic}" "$automerge"
-
-    echo "$comments"$'\t'"$automerge"
+# Show all open PRs when no topic given
+_show_all_prs() {
+    echo -e "${BOLD}Your open PRs:${NC}"
+    if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
+        cache_get "outstanding" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
+    else
+        gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
+    fi
 }
 
 run_status() {
     local topic="$1"
 
-    # No topic: list all open PRs (use outstanding cache if available)
+    # No topic: list all open PRs
     if [[ -z "$topic" ]]; then
-        echo -e "${BOLD}Your open PRs:${NC}"
-        if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
-            cache_get "outstanding" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
-        else
-            gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-        fi
+        _show_all_prs
         return 0
     fi
 
-    # Yank mode: just copy to clipboard and exit
-    if [[ "$COPY_TO_CLIPBOARD" == "true" ]]; then
-        local pr_json
-        pr_json=$(cache_get "status_${topic}")
-        if [[ -z "$pr_json" ]] || ! pr_exists "$pr_json"; then
-            pr_json=$(_fetch_status_json "$topic")
-            pr_exists "$pr_json" && cache_set "status_${topic}" "$pr_json"
-        fi
-        if pr_exists "$pr_json"; then
-            copy_pr_to_clipboard "$pr_json"
-        else
-            pr_not_found "$topic"
-            return 1
-        fi
-        return 0
-    fi
+    # Set up module state and hooks
+    _STATUS_TOPIC="$topic"
+    DISPLAY_EARLY_EXIT_FN="_status_early_exit"
+    DISPLAY_NOT_FOUND_FN="_status_not_found"
 
-    local cache_key="status_${topic}"
-    local cached_json fresh_json cached_comments cached_automerge
+    display_with_refresh \
+        "status_${topic}" \
+        "_fetch_status" \
+        "_render_status" \
+        "Fetching PR..." \
+        "_post_cache_status" \
+        '_status_is_empty "$data"'
+    local result=$?
 
-    cached_json=$(cache_get "$cache_key")
-    cached_comments=$(cache_get "comments_${topic}")
-    cached_automerge=$(cache_get "automerge_${topic}")
+    # Clean up hooks
+    DISPLAY_EARLY_EXIT_FN=""
+    DISPLAY_NOT_FOUND_FN=""
 
-    # Don't use cached data if PR is already merged (stale cache from different PR)
-    local cached_state
-    cached_state=$(echo "$cached_json" | jq -r '.[0].state // empty' 2>/dev/null)
-
-    if [[ -n "$cached_json" ]] && pr_exists "$cached_json" && [[ "$cached_state" != "MERGED" ]] && is_interactive; then
-        # Have valid cache - render to variable first, count lines, then display
-        local cached_output line_count
-        cached_output=$(_render_status "$cached_json" "$cached_comments" "$cached_automerge")
-        line_count=$(($(echo "$cached_output" | wc -l) + 1))  # +1 for "Refreshing..." line
-
-        # Display cached output
-        echo "$cached_output"
-        echo -e "${DIM}⟳ Refreshing...${NC}"
-
-        # Fetch fresh data (user sees cached immediately)
-        fresh_json=$(_fetch_status_json "$topic")
-
-        if pr_exists "$fresh_json"; then
-            # Check if data changed by comparing JSON
-            if [[ "$fresh_json" != "$cached_json" ]] || [[ -z "$cached_comments" ]]; then
-                cache_set "$cache_key" "$fresh_json"
-
-                local extras fresh_comments fresh_automerge
-                extras=$(_fetch_status_extras "$fresh_json" "$topic")
-                IFS=$'\t' read -r fresh_comments fresh_automerge <<< "$extras"
-
-                # Move cursor up by line_count, clear to end of screen, re-render
-                tput cuu "$line_count" 2>/dev/null || true
-                tput ed 2>/dev/null || true
-                _render_status "$fresh_json" "$fresh_comments" "$fresh_automerge"
-                echo -e "${DIM}↻ Updated${NC}"
-            else
-                # Just update the refreshing line
-                tput cuu 1 2>/dev/null || true
-                tput el 2>/dev/null || true
-                echo -e "${DIM}✓ Up to date${NC}"
-            fi
-        else
-            tput cuu 1 2>/dev/null || true
-            tput el 2>/dev/null || true
-            echo -e "${DIM}✓ (cached)${NC}"
-        fi
-    else
-        # No cache or non-interactive - fetch with spinner
-        fresh_json=$(fetch_with_spinner "Fetching PR..." _fetch_status_json "$topic")
-
-        if pr_exists "$fresh_json"; then
-            cache_set "$cache_key" "$fresh_json"
-
-            local extras fresh_comments fresh_automerge
-            extras=$(_fetch_status_extras "$fresh_json" "$topic")
-            IFS=$'\t' read -r fresh_comments fresh_automerge <<< "$extras"
-
-            _render_status "$fresh_json" "$fresh_comments" "$fresh_automerge"
-        else
-            pr_not_found "$topic"
-            echo ""
-            # Try to find similar topics (use outstanding cache if available)
-            local similar outstanding_data
-            if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
-                outstanding_data=$(cache_get "outstanding")
-            else
-                outstanding_data=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null)
-            fi
-            similar=$(echo "$outstanding_data" | jq -r --arg topic "$topic" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
-
-            if [[ -n "$similar" ]]; then
-                echo -e "${YELLOW}Similar topics:${NC}"
-                echo "$similar"
-            else
-                echo -e "${BOLD}Your open PRs:${NC}"
-                if [[ -n "$outstanding_data" ]]; then
-                    echo "$outstanding_data" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
-                else
-                    gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-                fi
-            fi
-            return 1
-        fi
-    fi
+    return $result
 }

@@ -1,56 +1,46 @@
 # prs queue_status mode - show all PRs in merge queue
 # shellcheck shell=bash
 
-run_queue_status() {
-    local filter_topic="$1"
-
-    # Query the actual merge queue via GraphQL
-    # Use headCommit on the entry (not PR) to get the queue's CI run
-    local queue_json
-    local cache_key="queue"
-
-    if cache_is_fresh "$cache_key" "$CACHE_TTL_QUEUE"; then
-        queue_json=$(cache_get "$cache_key")
-    else
-        queue_json=$(gh api graphql -f query='
-    {
-      repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
-        mergeQueue(branch: "main") {
-          entries(first: 50) {
-            nodes {
-              enqueuedAt
-              position
-              headCommit {
-                statusCheckRollup {
-                  contexts(first: 50) {
-                    nodes {
-                      ... on StatusContext {
-                        context
-                        targetUrl
-                        state
-                      }
-                    }
+_fetch_queue() {
+    gh api graphql -f query='
+{
+  repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
+    mergeQueue(branch: "main") {
+      entries(first: 50) {
+        nodes {
+          enqueuedAt
+          position
+          headCommit {
+            statusCheckRollup {
+              contexts(first: 50) {
+                nodes {
+                  ... on StatusContext {
+                    context
+                    targetUrl
+                    state
                   }
                 }
               }
-              pullRequest {
-                number
-                title
-                headRefName
-                url
-                body
-                author { login }
-                reviewDecision
-              }
             }
+          }
+          pullRequest {
+            number
+            title
+            headRefName
+            url
+            body
+            author { login }
+            reviewDecision
           }
         }
       }
-    }' 2>/dev/null)
-        if [[ -n "$queue_json" ]]; then
-            cache_set "$cache_key" "$queue_json"
-        fi
-    fi
+    }
+  }
+}' 2>/dev/null
+}
+
+_render_queue() {
+    local queue_json="$1"
 
     local queue_count
     queue_count=$(echo "$queue_json" | jq '.data.repository.mergeQueue.entries.nodes | length')
@@ -66,7 +56,6 @@ run_queue_status() {
     local now_epoch
     now_epoch=$(date +%s)
 
-    # Process each entry using jq to output JSON, then parse in bash
     local entries
     entries=$(echo "$queue_json" | jq -c '.data.repository.mergeQueue.entries.nodes[]')
 
@@ -81,7 +70,7 @@ run_queue_status() {
         author=$(echo "$entry" | jq -r '.pullRequest.author.login')
         review_decision=$(echo "$entry" | jq -r '.pullRequest.reviewDecision // "NONE"')
         enqueued_at=$(echo "$entry" | jq -r '.enqueuedAt')
-        bk_url=$(echo "$entry" | jq -r '.headCommit.statusCheckRollup.contexts.nodes | map(select(.context == "'"$CI_CHECK_CONTEXT"'")) | .[0].targetUrl // empty')
+        bk_url=$(echo "$entry" | jq -r '.headCommit.statusCheckRollup.contexts.nodes // [] | map(select(.context == "'"$CI_CHECK_CONTEXT"'")) | .[0].targetUrl // empty')
 
         # Extract topic from body or branch name (case-insensitive)
         topic=$(echo "$entry" | jq -r '.pullRequest.body // ""' | grep -oiP 'Topic:\s*\K\S+' | head -1 || true)
@@ -118,4 +107,16 @@ run_queue_status() {
         fi
         echo ""
     done <<< "$entries"
+}
+
+# Custom empty check for queue - GraphQL always returns valid JSON, check nodes array
+_queue_is_empty() {
+    local data="$1"
+    [[ -z "$data" ]] || ! echo "$data" | jq -e '.data.repository.mergeQueue' >/dev/null 2>&1
+}
+
+run_queue_status() {
+    local filter_topic="$1"
+
+    display_with_refresh "queue" "_fetch_queue" "_render_queue" "Fetching merge queue..." "" '_queue_is_empty "$data"'
 }
