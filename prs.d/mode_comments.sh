@@ -96,12 +96,48 @@ _render_comments() {
     done < <(echo "$filtered_json" | jq -j '.[] | (([(.in_reply_to_id // ""), .user.login, (.created_at | split("T")[0]), .path, (.line // .original_line // "?")] | join("\u001e")) + "\u001e" + .body + "\u001f")')
 }
 
+# Global state for comments mode (set by run_comments, used by wrapper functions)
+_COMMENTS_TOPIC=""
+_COMMENTS_SHOW_RESOLVED="false"
+
+# Fetch comments for topic - finds PR if needed, then fetches comments
+_comments_fetch_for_topic() {
+    local pr_json number title url
+
+    # First find the PR to get its info
+    pr_json=$(cached_find_pr "$_COMMENTS_TOPIC" "all" "number,title,url")
+    if ! pr_exists "$pr_json"; then
+        return 1
+    fi
+
+    number=$(pr_field "$pr_json" "number")
+    title=$(pr_field "$pr_json" "title")
+    url=$(pr_field "$pr_json" "url")
+
+    _fetch_comments_data "$number" "$title" "$url"
+}
+
+# Render wrapper that uses global show_resolved state
+_comments_render() {
+    local data="$1"
+    _render_comments "$data" "$_COMMENTS_SHOW_RESOLVED" "true"
+    echo ""  # Extra blank line for spacing
+}
+
+# Post-cache hook: update unresolved count cache
+_comments_post_cache() {
+    local fresh_data="$1"
+    local unresolved_count
+    unresolved_count=$(echo "$fresh_data" | jq '[.resolution | to_entries[] | select(.value == false)] | length')
+    cache_set "comments_${_COMMENTS_TOPIC}" "$unresolved_count"
+}
+
 run_comments() {
     local topic="$1"
     shift
-    local show_resolved=false
 
     # Parse extra args
+    local show_resolved=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --show-resolved) show_resolved=true; shift ;;
@@ -111,103 +147,19 @@ run_comments() {
 
     require_topic "comments" "$topic" || return 1
 
-    local cache_key="comments_data_${topic}"
-    local cached_data fresh_data
+    # Set global state for wrapper functions
+    _COMMENTS_TOPIC="$topic"
+    _COMMENTS_SHOW_RESOLVED="$show_resolved"
 
-    cached_data=$(cache_get "$cache_key")
-
-    if [[ -n "$cached_data" ]] && is_interactive; then
-        # Have cache - render directly to terminal (fast!)
-        # Capture output to count lines for reliable cursor movement
-        local cached_output
-        cached_output=$(_render_comments "$cached_data" "$show_resolved" "true")
-        echo "$cached_output"
-        echo ""
-        echo -e "${DIM}⟳ Refreshing...${NC}"
-
-        # Count lines rendered (add 2 for blank line and "Refreshing..." line)
-        local line_count
-        line_count=$(($(echo "$cached_output" | wc -l) + 2))
-
-        # Get PR info from cache for refresh
-        local number title url
-        number=$(echo "$cached_data" | jq -r '.number')
-        title=$(echo "$cached_data" | jq -r '.title')
-        url=$(echo "$cached_data" | jq -r '.url')
-
-        # Fetch fresh
-        fresh_data=$(_fetch_comments_data "$number" "$title" "$url")
-
-        if [[ -n "$fresh_data" ]]; then
-            cache_set "$cache_key" "$fresh_data"
-            local unresolved_count
-            unresolved_count=$(echo "$fresh_data" | jq '[.resolution | to_entries[] | select(.value == false)] | length')
-            cache_set "comments_${topic}" "$unresolved_count"
-
-            # Compare JSON to detect changes (faster than comparing rendered output)
-            if [[ "$fresh_data" != "$cached_data" ]]; then
-                # Data changed - move up by line count, clear, and re-render
-                tput cuu "$line_count" 2>/dev/null || true
-                tput ed 2>/dev/null || true
-                _render_comments "$fresh_data" "$show_resolved" "true"
-                echo ""
-                echo -e "${DIM}↻ Updated${NC}"
-            else
-                # No change - just update status line
-                tput cuu 1 2>/dev/null || true
-                tput el 2>/dev/null || true
-                echo -e "${DIM}✓ Up to date${NC}"
-            fi
-        else
-            tput cuu 1 2>/dev/null || true
-            tput el 2>/dev/null || true
-            echo -e "${DIM}✓ (cached)${NC}"
-        fi
-    else
-        # No cache - need to find PR first
-        local pr_json
-        if is_interactive; then
-            show_spinner "Finding PR..." &
-            local spinner_pid=$!
-            pr_json=$(cached_find_pr "$topic" "all" "number,title,url")
-            stop_spinner "$spinner_pid"
-        else
-            pr_json=$(cached_find_pr "$topic" "all" "number,title,url")
-        fi
-
-        if ! pr_exists "$pr_json"; then
-            pr_not_found "$topic"
-            return 1
-        fi
-
-        local number title url
-        number=$(pr_field "$pr_json" "number")
-        title=$(pr_field "$pr_json" "title")
-        url=$(pr_field "$pr_json" "url")
-
-        print_pr_header "$number" "$title" "$url"
-        echo ""
-
-        if is_interactive; then
-            show_spinner "Fetching comments..." &
-            spinner_pid=$!
-            fresh_data=$(_fetch_comments_data "$number" "$title" "$url")
-            stop_spinner "$spinner_pid"
-        else
-            fresh_data=$(_fetch_comments_data "$number" "$title" "$url")
-        fi
-
-        if [[ -n "$fresh_data" ]]; then
-            cache_set "$cache_key" "$fresh_data"
-            local unresolved_count
-            unresolved_count=$(echo "$fresh_data" | jq '[.resolution | to_entries[] | select(.value == false)] | length')
-            cache_set "comments_${topic}" "$unresolved_count"
-
-            _render_comments "$fresh_data" "$show_resolved" "false"  # header already printed
-            echo ""
-        else
-            echo -e "${RED}Failed to fetch comments${NC}"
-            return 1
-        fi
+    # Use display_with_refresh for the standard cache-then-refresh pattern
+    if ! display_with_refresh \
+        "comments_data_${topic}" \
+        "_comments_fetch_for_topic" \
+        "_comments_render" \
+        "Fetching comments..." \
+        "_comments_post_cache"; then
+        # Fetch failed - likely PR not found
+        pr_not_found "$topic"
+        return 1
     fi
 }

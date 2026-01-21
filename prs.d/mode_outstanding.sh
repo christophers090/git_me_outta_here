@@ -91,7 +91,7 @@ _render_outstanding() {
         fi
     }
 
-    # Helper: Get chain order string (topic -> child -> grandchild)
+    # Helper: Get chain order string (main <- topic <- child <- grandchild)
     _get_chain_order() {
         local topic="$1"
         local result="$topic"
@@ -99,7 +99,7 @@ _render_outstanding() {
         if [[ -n "$children" ]]; then
             local child_array=($children)
             for child in "${child_array[@]}"; do
-                result="$result -> $(_get_chain_order "$child")"
+                result="$result <- $(_get_chain_order "$child")"
             done
         fi
         echo "$result"
@@ -166,7 +166,7 @@ _render_outstanding() {
                     local chain_order
                     chain_order=$(_get_chain_order "$root")
                     echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
-                    echo -e "${DIM}${chain_order}${NC}"
+                    echo -e "${DIM}main <- ${chain_order}${NC}"
                     echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
                     echo ""
                     _print_chain "$root" "  "
@@ -195,7 +195,7 @@ _render_outstanding() {
         filter_root=$(_find_chain_root "$filter_topic")
         chain_order=$(_get_chain_order "$filter_root")
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
-        echo -e "${DIM}${chain_order}${NC}"
+        echo -e "${DIM}main <- ${chain_order}${NC}"
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo ""
         _print_chain "$filter_root" "  "
@@ -207,7 +207,7 @@ _render_outstanding() {
         local chain_order
         chain_order=$(_get_chain_order "$root")
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
-        echo -e "${DIM}${chain_order}${NC}"
+        echo -e "${DIM}main <- ${chain_order}${NC}"
         echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
         echo ""
         _print_chain "$root" "  "
@@ -222,10 +222,28 @@ _render_outstanding() {
     done
 }
 
+# Global state for rendering (set by run_outstanding, used by wrapper functions)
+_OUTSTANDING_FILTER_TOPIC=""
+_OUTSTANDING_FILTER_TOPICS_STR=""
+
+# Render wrapper that uses global filter state
+_outstanding_render() {
+    _render_outstanding "$1" "$_OUTSTANDING_FILTER_TOPIC" "$_OUTSTANDING_FILTER_TOPICS_STR"
+}
+
+# Post-cache hook: update completion cache and prefetch PR data
+_outstanding_post_cache() {
+    local fresh_json="$1"
+    update_completion_cache "$fresh_json"
+    # Prefetch status in background (only if interactive)
+    if is_interactive; then
+        prefetch_all_pr_data "$fresh_json" &
+    fi
+}
+
 run_outstanding() {
     local filter_topic="$1"
     local filter_topics=()
-    local filter_topics_str=""
 
     # Handle "this" - show PRs for current worktree's topics
     if [[ "$filter_topic" == "this" ]]; then
@@ -246,85 +264,17 @@ run_outstanding() {
         echo -e "${DIM}Branch: ${current_branch}${NC}"
         echo ""
         filter_topic=""  # Clear so we use filter_topics array instead
-        filter_topics_str="${filter_topics[*]}"
     fi
 
-    # Check cache
-    local cached_json fresh_json
-    local cache_key="outstanding"
+    # Set global state for render wrapper
+    _OUTSTANDING_FILTER_TOPIC="$filter_topic"
+    _OUTSTANDING_FILTER_TOPICS_STR="${filter_topics[*]}"
 
-    cached_json=$(cache_get "$cache_key")
-
-    if [[ -n "$cached_json" ]] && is_interactive; then
-        # Have cache - show it immediately, then refresh in background
-        local cached_output fresh_output
-
-        cached_output=$(_render_outstanding "$cached_json" "$filter_topic" "$filter_topics_str")
-
-        # Save cursor position before printing cached output
-        tput sc 2>/dev/null || true
-
-        # Print cached output + loading indicator
-        echo "$cached_output"
-        echo -e "${DIM}⟳ Refreshing...${NC}"
-
-        # Fetch fresh data
-        fresh_json=$(_fetch_outstanding_json)
-
-        if [[ -n "$fresh_json" && "$fresh_json" != "[]" ]]; then
-            cache_set "$cache_key" "$fresh_json"
-            update_completion_cache "$fresh_json"
-
-            fresh_output=$(_render_outstanding "$fresh_json" "$filter_topic" "$filter_topics_str")
-
-            # Restore cursor and clear to end of screen
-            tput rc 2>/dev/null || true
-            tput ed 2>/dev/null || true
-
-            # Print fresh output
-            echo "$fresh_output"
-
-            # Show status
-            if [[ "$cached_output" != "$fresh_output" ]]; then
-                echo -e "${DIM}↻ Updated${NC}"
-            else
-                echo -e "${DIM}✓ Up to date${NC}"
-            fi
-
-            # Prefetch status for all PRs in background
-            prefetch_all_pr_data "$fresh_json" &
-        else
-            # API failed - just remove the refreshing indicator
-            tput cuu 1 2>/dev/null || true
-            tput ed 2>/dev/null || true
-            echo -e "${DIM}✓ (cached)${NC}"
-        fi
-    else
-        # No cache - fetch with spinner
-        if is_interactive; then
-            show_spinner "Fetching PRs..." &
-            local spinner_pid=$!
-            fresh_json=$(_fetch_outstanding_json)
-            stop_spinner "$spinner_pid"
-        else
-            # Non-interactive (piped) - fetch quietly
-            fresh_json=$(_fetch_outstanding_json)
-        fi
-
-        if [[ -n "$fresh_json" && "$fresh_json" != "[]" ]]; then
-            cache_set "$cache_key" "$fresh_json"
-            update_completion_cache "$fresh_json"
-            _render_outstanding "$fresh_json" "$filter_topic" "$filter_topics_str"
-
-            # Prefetch status in background (only if interactive)
-            if is_interactive; then
-                prefetch_all_pr_data "$fresh_json" &
-            fi
-        elif [[ "$fresh_json" == "[]" ]]; then
-            echo "No open PRs found for $GITHUB_USER"
-        else
-            echo -e "${RED}Failed to fetch PRs${NC}" >&2
-            return 1
-        fi
-    fi
+    # Use display_with_refresh for the standard cache-then-refresh pattern
+    display_with_refresh \
+        "outstanding" \
+        "_fetch_outstanding_json" \
+        "_outstanding_render" \
+        "Fetching PRs..." \
+        "_outstanding_post_cache"
 }

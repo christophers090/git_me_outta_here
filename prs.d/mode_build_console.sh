@@ -20,7 +20,11 @@ run_build_console() {
         esac
     done
 
-    require_topic "build_console" "$topic" || return 1
+    if [[ -z "$topic" ]]; then
+        echo -e "${RED}Error:${NC} Topic required for build_console"
+        echo "Usage: prs -bcon <topic> <job#> [-n lines]"
+        return 1
+    fi
 
     if [[ -z "$job_num" ]]; then
         echo -e "${RED}Error:${NC} Job number required"
@@ -30,21 +34,12 @@ run_build_console() {
         return 1
     fi
 
-    local pr_json
-    pr_json=$(cached_find_pr "$topic" "all" "number,title,statusCheckRollup")
+    get_pr_or_fail "$topic" "build_console" "all" "number,title,statusCheckRollup" || return 1
+    pr_basics
 
-    if ! pr_exists "$pr_json"; then
-        pr_not_found "$topic"
-        return 1
-    fi
+    BK_BUILD_URL=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
 
-    local number title
-    number=$(pr_field "$pr_json" "number")
-    title=$(pr_field "$pr_json" "title")
-
-    BK_BUILD_URL=$(echo "$pr_json" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
-
-    if ! get_build_for_topic "$topic" "$number" "$title"; then
+    if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1
     fi
 
@@ -73,7 +68,7 @@ run_build_console() {
         return 1
     fi
 
-    echo -e "${BOLD}${BLUE}PR #${number}:${NC} ${title}"
+    echo -e "${BOLD}${BLUE}PR #${PR_NUMBER}:${NC} ${PR_TITLE}"
     echo -e "${DIM}Build #${BK_BUILD_NUMBER} | Job #${job_num}: ${BK_JOB_NAME}${NC}"
     echo -e "${DIM}Showing last ${lines} lines${NC}"
     echo ""

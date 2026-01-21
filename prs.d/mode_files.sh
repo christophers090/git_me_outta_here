@@ -3,22 +3,11 @@
 
 run_files() {
     local topic="$1"
-    require_topic "files" "$topic" || return 1
+    get_pr_or_fail "$topic" "files" "all" "number,title,files" || return 1
+    pr_basics
 
-    local pr_json
-    pr_json=$(cached_find_pr "$topic" "all" "number,title,files")
-
-    if ! pr_exists "$pr_json"; then
-        pr_not_found "$topic"
-        return 1
-    fi
-
-    local number title
-    number=$(pr_field "$pr_json" "number")
-    title=$(pr_field "$pr_json" "title")
-
-    echo -e "${BOLD}${BLUE}PR #${number}:${NC} ${title}"
+    echo -e "${BOLD}${BLUE}PR #${PR_NUMBER}:${NC} ${PR_TITLE}"
     echo ""
 
-    echo "$pr_json" | jq -r '.[0].files[] | "\(.path) (+\(.additions)/-\(.deletions))"'
+    echo "$PR_JSON" | jq -r '.[0].files[] | "\(.path) (+\(.additions)/-\(.deletions))"'
 }

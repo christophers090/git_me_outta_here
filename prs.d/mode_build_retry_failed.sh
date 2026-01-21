@@ -3,27 +3,16 @@
 
 run_build_retry_failed() {
     local topic="$1"
-    require_topic "build_retry_failed" "$topic" || return 1
+    get_pr_or_fail "$topic" "build_retry_failed" "all" "number,title,statusCheckRollup" || return 1
+    pr_basics
 
-    local pr_json
-    pr_json=$(cached_find_pr "$topic" "all" "number,title,statusCheckRollup")
+    BK_BUILD_URL=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
 
-    if ! pr_exists "$pr_json"; then
-        pr_not_found "$topic"
+    if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1
     fi
 
-    local number title
-    number=$(pr_field "$pr_json" "number")
-    title=$(pr_field "$pr_json" "title")
-
-    BK_BUILD_URL=$(echo "$pr_json" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
-
-    if ! get_build_for_topic "$topic" "$number" "$title"; then
-        return 1
-    fi
-
-    echo -e "${BOLD}${BLUE}PR #${number}:${NC} ${title}"
+    echo -e "${BOLD}${BLUE}PR #${PR_NUMBER}:${NC} ${PR_TITLE}"
     echo -e "${DIM}Build #${BK_BUILD_NUMBER}${NC}"
     echo ""
 

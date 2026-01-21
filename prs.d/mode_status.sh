@@ -189,6 +189,22 @@ _render_status() {
     fi
 }
 
+# Fetch and cache extra status data (comments + automerge) after getting PR JSON
+_fetch_status_extras() {
+    local pr_json="$1"
+    local topic="$2"
+    local pr_number comments automerge
+
+    pr_number=$(echo "$pr_json" | jq -r '.[0].number')
+    comments=$(get_unresolved_count "$pr_number")
+    automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
+
+    cache_set "comments_${topic}" "$comments"
+    cache_set "automerge_${topic}" "$automerge"
+
+    echo "$comments"$'\t'"$automerge"
+}
+
 run_status() {
     local topic="$1"
 
@@ -205,30 +221,27 @@ run_status() {
 
     # Yank mode: just copy to clipboard and exit
     if [[ "$COPY_TO_CLIPBOARD" == "true" ]]; then
-        local cache_key="status_${topic}"
         local pr_json
-        pr_json=$(cache_get "$cache_key")
+        pr_json=$(cache_get "status_${topic}")
         if [[ -z "$pr_json" ]] || ! pr_exists "$pr_json"; then
             pr_json=$(_fetch_status_json "$topic")
-            pr_exists "$pr_json" && cache_set "$cache_key" "$pr_json"
+            pr_exists "$pr_json" && cache_set "status_${topic}" "$pr_json"
         fi
         if pr_exists "$pr_json"; then
             copy_pr_to_clipboard "$pr_json"
         else
-            echo -e "${RED}No PR found for topic:${NC} $topic"
+            pr_not_found "$topic"
             return 1
         fi
         return 0
     fi
 
     local cache_key="status_${topic}"
-    local comments_cache_key="comments_${topic}"
-    local automerge_cache_key="automerge_${topic}"
     local cached_json fresh_json cached_comments cached_automerge
 
     cached_json=$(cache_get "$cache_key")
-    cached_comments=$(cache_get "$comments_cache_key")
-    cached_automerge=$(cache_get "$automerge_cache_key")
+    cached_comments=$(cache_get "comments_${topic}")
+    cached_automerge=$(cache_get "automerge_${topic}")
 
     # Don't use cached data if PR is already merged (stale cache from different PR)
     local cached_state
@@ -252,12 +265,9 @@ run_status() {
             if [[ "$fresh_json" != "$cached_json" ]] || [[ -z "$cached_comments" ]]; then
                 cache_set "$cache_key" "$fresh_json"
 
-                local pr_number fresh_comments fresh_automerge
-                pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
-                fresh_comments=$(get_unresolved_count "$pr_number")
-                fresh_automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
-                cache_set "$comments_cache_key" "$fresh_comments"
-                cache_set "$automerge_cache_key" "$fresh_automerge"
+                local extras fresh_comments fresh_automerge
+                extras=$(_fetch_status_extras "$fresh_json" "$topic")
+                IFS=$'\t' read -r fresh_comments fresh_automerge <<< "$extras"
 
                 # Move cursor up by line_count, clear to end of screen, re-render
                 tput cuu "$line_count" 2>/dev/null || true
@@ -277,29 +287,18 @@ run_status() {
         fi
     else
         # No cache or non-interactive - fetch with spinner
-        if is_interactive; then
-            show_spinner "Fetching PR..." &
-            local spinner_pid=$!
-            fresh_json=$(_fetch_status_json "$topic")
-            stop_spinner "$spinner_pid"
-        else
-            fresh_json=$(_fetch_status_json "$topic")
-        fi
+        fresh_json=$(fetch_with_spinner "Fetching PR..." _fetch_status_json "$topic")
 
         if pr_exists "$fresh_json"; then
             cache_set "$cache_key" "$fresh_json"
 
-            # Fetch comment count and auto-merge status, then cache
-            local pr_number fresh_comments fresh_automerge
-            pr_number=$(echo "$fresh_json" | jq -r '.[0].number')
-            fresh_comments=$(get_unresolved_count "$pr_number")
-            fresh_automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
-            cache_set "$comments_cache_key" "$fresh_comments"
-            cache_set "$automerge_cache_key" "$fresh_automerge"
+            local extras fresh_comments fresh_automerge
+            extras=$(_fetch_status_extras "$fresh_json" "$topic")
+            IFS=$'\t' read -r fresh_comments fresh_automerge <<< "$extras"
 
             _render_status "$fresh_json" "$fresh_comments" "$fresh_automerge"
         else
-            echo -e "${RED}No PR found for topic:${NC} $topic"
+            pr_not_found "$topic"
             echo ""
             # Try to find similar topics (use outstanding cache if available)
             local similar outstanding_data

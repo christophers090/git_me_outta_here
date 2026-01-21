@@ -52,6 +52,7 @@ usage() {
   echo "  -bc <topic> <#>          Cancel a running job by step number"
   echo "  -bcon <topic> <#>        Show console output (last 10 lines by default)"
   echo "  -bcon <topic> <#> -n N   Show last N lines of console output"
+  echo "  -bdump <topic>           Dump full console output from all failed jobs"
   echo ""
   echo -e "${BOLD}Other Options${NC}"
   echo "  -u, --user <username>    Query PRs for a different GitHub user (disables cache)"
@@ -162,6 +163,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   -bcon)
     MODE="build_console"
+    shift
+    ;;
+  -bdump)
+    MODE="build_dump"
     shift
     ;;
   -rq)

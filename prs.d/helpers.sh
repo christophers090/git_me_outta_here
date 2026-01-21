@@ -1,6 +1,11 @@
 # prs shared helpers - sourced by main script
 # shellcheck shell=bash
 
+# Print error message to stderr
+error_msg() {
+    echo -e "${RED}Error:${NC} $1" >&2
+}
+
 # Update tab completion cache from PR JSON
 # Usage: update_completion_cache "$prs_json"
 update_completion_cache() {
@@ -63,6 +68,46 @@ pr_not_found() {
 pr_not_found_open() {
     local topic="$1"
     echo -e "${RED}No open PR found for topic:${NC} $topic"
+}
+
+# Print error for missing closed PR
+pr_not_found_closed() {
+    local topic="$1"
+    echo -e "${RED}No closed PR found for topic:${NC} $topic"
+}
+
+# Find PR or print error and return failure
+# Sets PR_JSON global variable on success
+# Args: $1=topic, $2=mode, $3=state (default: all), $4=fields (default: number,title,url)
+# Returns: 0 if found, 1 if not found (with error message printed)
+get_pr_or_fail() {
+    local topic="$1"
+    local mode="$2"
+    local state="${3:-all}"
+    local fields="${4:-number,title,url}"
+
+    require_topic "$mode" "$topic" || return 1
+
+    PR_JSON=$(cached_find_pr "$topic" "$state" "$fields")
+
+    if ! pr_exists "$PR_JSON"; then
+        case "$state" in
+            open) pr_not_found_open "$topic" ;;
+            closed) pr_not_found_closed "$topic" ;;
+            *) pr_not_found "$topic" ;;
+        esac
+        return 1
+    fi
+    return 0
+}
+
+# Extract common PR fields to global variables
+# Requires PR_JSON to be set (from get_pr_or_fail)
+# Sets: PR_NUMBER, PR_TITLE, PR_URL
+pr_basics() {
+    PR_NUMBER=$(pr_field "$PR_JSON" "number")
+    PR_TITLE=$(pr_field "$PR_JSON" "title")
+    PR_URL=$(pr_field "$PR_JSON" "url")
 }
 
 # Get topics from current branch (for "this" mode)

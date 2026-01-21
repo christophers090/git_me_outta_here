@@ -137,6 +137,139 @@ stop_spinner() {
     tput cnorm 2>/dev/null || true  # Show cursor
 }
 
+# Execute command with spinner if interactive, otherwise run quietly
+# Args: $1=message, $2+=command and args
+# Output: command output to stdout
+fetch_with_spinner() {
+    local msg="$1"
+    shift
+
+    if is_interactive; then
+        show_spinner "$msg" &
+        local pid=$!
+        local result
+        result=$("$@")
+        stop_spinner "$pid"
+        echo "$result"
+    else
+        "$@"
+    fi
+}
+
+# Display cached data immediately, refresh in background, update display if changed
+# This is the standard "show cached, then refresh" pattern used by multiple modes.
+#
+# Args:
+#   $1 - cache_key: key for cache_get/cache_set
+#   $2 - fetch_fn: function name to fetch fresh data (called directly, not eval'd)
+#   $3 - render_fn: function name to render data (called with data as first arg)
+#   $4 - spinner_msg: message for spinner when no cache
+#   $5 - post_cache_fn: optional function to run after caching (called with fresh data as arg)
+#   $6 - empty_check: optional expression to check if data is empty (default: checks for empty string or "[]")
+#
+# Returns: 0 on success, 1 on failure
+# Sets: DISPLAY_REFRESH_DATA to the final data (for caller to use if needed)
+display_with_refresh() {
+    local cache_key="$1"
+    local fetch_fn="$2"
+    local render_fn="$3"
+    local spinner_msg="$4"
+    local post_cache_fn="${5:-}"
+    local empty_check="${6:-}"
+
+    local cached_data fresh_data
+    cached_data=$(cache_get "$cache_key")
+
+    # Helper to check if data is empty
+    _is_empty() {
+        local data="$1"
+        if [[ -n "$empty_check" ]]; then
+            eval "$empty_check"
+        else
+            [[ -z "$data" || "$data" == "[]" ]]
+        fi
+    }
+
+    if [[ -n "$cached_data" ]] && is_interactive; then
+        # Have cache - show it immediately, then refresh in background
+        local cached_output
+        cached_output=$("$render_fn" "$cached_data")
+
+        # Count lines for reliable cursor movement
+        local cached_lines
+        cached_lines=$(echo "$cached_output" | wc -l)
+
+        # Print cached output + loading indicator
+        echo "$cached_output"
+        echo -e "${DIM}⟳ Refreshing...${NC}"
+
+        # Fetch fresh data
+        fresh_data=$("$fetch_fn")
+
+        if ! _is_empty "$fresh_data"; then
+            cache_set "$cache_key" "$fresh_data"
+
+            # Run post-cache function if provided
+            if [[ -n "$post_cache_fn" ]]; then
+                "$post_cache_fn" "$fresh_data"
+            fi
+
+            local fresh_output
+            fresh_output=$("$render_fn" "$fresh_data")
+
+            # Move cursor up by (cached_lines + 1 for refreshing line), then clear to end
+            local lines_to_clear=$((cached_lines + 1))
+            tput cuu "$lines_to_clear" 2>/dev/null || true
+            tput ed 2>/dev/null || true
+
+            # Print fresh output
+            echo "$fresh_output"
+
+            # Show status
+            if [[ "$cached_output" != "$fresh_output" ]]; then
+                echo -e "${DIM}↻ Updated${NC}"
+            else
+                echo -e "${DIM}✓ Up to date${NC}"
+            fi
+
+            DISPLAY_REFRESH_DATA="$fresh_data"
+        else
+            # API failed - just remove the refreshing indicator
+            tput cuu 1 2>/dev/null || true
+            tput ed 2>/dev/null || true
+            echo -e "${DIM}✓ (cached)${NC}"
+            DISPLAY_REFRESH_DATA="$cached_data"
+        fi
+    else
+        # No cache - fetch with spinner
+        if is_interactive; then
+            show_spinner "$spinner_msg" &
+            local spinner_pid=$!
+            fresh_data=$("$fetch_fn")
+            stop_spinner "$spinner_pid"
+        else
+            fresh_data=$("$fetch_fn")
+        fi
+
+        if ! _is_empty "$fresh_data"; then
+            cache_set "$cache_key" "$fresh_data"
+
+            # Run post-cache function if provided
+            if [[ -n "$post_cache_fn" ]]; then
+                "$post_cache_fn" "$fresh_data"
+            fi
+
+            "$render_fn" "$fresh_data"
+            DISPLAY_REFRESH_DATA="$fresh_data"
+        else
+            echo -e "${RED}Failed to fetch data${NC}" >&2
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 # Background prefetch status AND comments for all open PRs
 # Called after outstanding list is fetched - makes subsequent prs <topic> and prs -c <topic> instant
 # Completely non-blocking - spawns background jobs and returns immediately
