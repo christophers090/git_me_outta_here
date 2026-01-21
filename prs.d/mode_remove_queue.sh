@@ -3,36 +3,47 @@
 
 run_remove_queue() {
     local topic="$1"
-    require_topic "remove_queue" "$topic" || return 1
+    get_pr_or_fail "$topic" "remove_queue" "open" "number,title,url" || return 1
+    pr_basics
 
-    local pr_json
-    pr_json=$(cached_find_pr "$topic" "open" "number,title,url,autoMergeRequest")
+    # Get the PR's GraphQL node ID and check if in merge queue
+    local query_result
+    query_result=$(gh api graphql -f query="{ repository(owner: \"${REPO_OWNER}\", name: \"${REPO_NAME}\") { pullRequest(number: ${PR_NUMBER}) { id, mergeQueueEntry { id } } } }")
 
-    if ! pr_exists "$pr_json"; then
-        pr_not_found_open "$topic"
+    local pr_node_id
+    pr_node_id=$(echo "$query_result" | jq -r '.data.repository.pullRequest.id // empty')
+
+    if [[ -z "$pr_node_id" ]]; then
+        echo -e "  ${CROSS} Failed to get PR node ID"
         return 1
     fi
 
-    local number title url auto_merge
-    number=$(pr_field "$pr_json" "number")
-    title=$(pr_field "$pr_json" "title")
-    url=$(pr_field "$pr_json" "url")
-    auto_merge=$(echo "$pr_json" | jq -r '.[0].autoMergeRequest // empty')
+    # Check if PR is in merge queue
+    local queue_entry_id
+    queue_entry_id=$(echo "$query_result" | jq -r '.data.repository.pullRequest.mergeQueueEntry.id // empty')
 
-    if [[ -z "$auto_merge" || "$auto_merge" == "null" ]]; then
-        echo -e "${YELLOW}PR #${number} is not in merge queue${NC}"
-        echo -e "  ${title}"
+    if [[ -z "$queue_entry_id" ]]; then
+        echo -e "${YELLOW}PR #${PR_NUMBER} is not in merge queue${NC}"
+        echo -e "  ${PR_TITLE}"
         return 1
     fi
 
-    echo -e "${BOLD}Removing from merge queue:${NC} #${number} - ${title}"
-    echo -e "  ${CYAN}${url}${NC}"
+    echo -e "${BOLD}Removing from merge queue:${NC} #${PR_NUMBER} - ${PR_TITLE}"
+    echo -e "  ${CYAN}${PR_URL}${NC}"
 
-    if gh pr merge "$number" -R "$REPO" --disable-auto; then
+    # Remove from merge queue via GraphQL - uses PR node ID, not queue entry ID
+    local result
+    result=$(gh api graphql -f query="mutation { dequeuePullRequest(input: {id: \"${pr_node_id}\"}) { mergeQueueEntry { id } } }" 2>&1)
+
+    if echo "$result" | grep -q '"mergeQueueEntry"'; then
         echo -e "  ${CHECK} Removed from merge queue"
+        invalidate_pr_caches "$topic"
         return 0
     else
+        local error_msg
+        error_msg=$(echo "$result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4 | head -1)
         echo -e "  ${CROSS} Failed to remove from merge queue"
+        [[ -n "$error_msg" ]] && echo -e "  ${DIM}${error_msg}${NC}"
         return 1
     fi
 }

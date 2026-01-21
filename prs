@@ -28,7 +28,7 @@ usage() {
   echo ""
   echo -e "${BOLD}PR Lifecycle${NC}"
   echo "  -m, --merge <topic>      Add PR to GitHub merge queue (requires main target)"
-  echo "  -rq <topic>              Remove PR from merge queue"
+  echo "  -qr <topic>              Remove PR from merge queue"
   echo "  -q, -qs                  Show all PRs currently in merge queue"
   echo "  --close <topic>          Close a PR without merging"
   echo "  --open <topic>           Reopen a previously closed PR"
@@ -169,7 +169,7 @@ while [[ $# -gt 0 ]]; do
     MODE="build_dump"
     shift
     ;;
-  -rq)
+  -qr)
     MODE="remove_queue"
     shift
     ;;
