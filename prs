@@ -44,6 +44,11 @@ usage() {
   echo "  -cr <topic> <#>          Reply to a comment (opens editor for input)"
   echo "  -crx <topic> <#>         Reply and resolve thread in one action"
   echo ""
+  echo -e "${BOLD}Peer Review${NC}"
+  echo "  -pa <topic>                Approve a PR (optional comment body via stdin)"
+  echo "  -prc <topic>               Request changes on a PR (body required via stdin)"
+  echo "  --pc <topic> <file>:<line> Post an inline comment on a specific line"
+  echo ""
   echo -e "${BOLD}Buildkite CI${NC}"
   echo "  -b, -bs <topic>          Show build steps with pass/fail/pending status"
   echo "  -bw <topic>              Open Buildkite build page in browser"
@@ -133,6 +138,18 @@ while [[ $# -gt 0 ]]; do
     MODE="comment_resolve"
     shift
     ;;
+  -pa)
+    MODE="review_approve"
+    shift
+    ;;
+  -prc)
+    MODE="review_request_changes"
+    shift
+    ;;
+  --pc)
+    MODE="post_comment"
+    shift
+    ;;
   --close)
     MODE="close"
     shift
@@ -194,8 +211,10 @@ while [[ $# -gt 0 ]]; do
     shift
     ;;
   -u | --user)
-    GITHUB_USER="$2"
-    BRANCH_USER="$2"
+    if ! resolve_user_alias "$2"; then
+      GITHUB_USER="$2"
+      BRANCH_USER="$2"
+    fi
     NO_CACHE=1
     shift 2
     ;;
@@ -213,8 +232,17 @@ while [[ $# -gt 0 ]]; do
     fi
     ;;
   -*)
-    echo -e "${RED}Unknown option:${NC} $1"
-    exit 1
+    # Check for custom mode in custom/ dir
+    _CUSTOM_MODE="${1#--}"
+    _CUSTOM_MODE="${_CUSTOM_MODE#-}"
+    _CUSTOM_MODE="${_CUSTOM_MODE//-/_}"
+    if [[ -f "$SCRIPT_DIR/custom/mode_${_CUSTOM_MODE}.sh" ]]; then
+      MODE="$_CUSTOM_MODE"
+      shift
+    else
+      echo -e "${RED}Unknown option:${NC} $1"
+      exit 1
+    fi
     ;;
   *)
     if [[ -z "$TOPIC" ]]; then
@@ -242,5 +270,9 @@ export COPY_TO_CLIPBOARD
 export NO_CACHE
 
 # Source and run mode
-source "$SCRIPT_DIR/prs.d/mode_${MODE}.sh"
+if [[ -f "$SCRIPT_DIR/custom/mode_${MODE}.sh" ]]; then
+  source "$SCRIPT_DIR/custom/mode_${MODE}.sh"
+else
+  source "$SCRIPT_DIR/prs.d/mode_${MODE}.sh"
+fi
 "run_${MODE}" "$TOPIC" "${EXTRA_ARGS[@]}"

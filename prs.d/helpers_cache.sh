@@ -206,7 +206,7 @@ display_with_refresh() {
         fi
     }
 
-    if [[ -n "$cached_data" ]] && is_interactive; then
+    if [[ -n "$cached_data" ]] && [[ -z "${NO_CACHE:-}" ]] && is_interactive; then
         # Have cache - show it immediately, then refresh in background
         local cached_output
         cached_output=$("$render_fn" "$cached_data")

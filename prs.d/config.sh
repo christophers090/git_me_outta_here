@@ -31,6 +31,39 @@ NC='\033[0m'
 CHECK="${GREEN}✓${NC}"
 CROSS="${RED}✗${NC}"
 
+# User alias map - resolves shorthand names to github_user:branch_user
+# Reads from user_map.conf (gitignored). Format: alias=github_user or alias=github_user:branch_user
+# If branch_user is omitted, github_user is used for both.
+USER_MAP_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/user_map.conf"
+
+# Resolve a user alias to github_user and branch_user
+# Usage: resolve_user_alias <name>
+# Sets: GITHUB_USER, BRANCH_USER
+# Returns: 0 if alias found (values set), 1 if not found (values unchanged)
+resolve_user_alias() {
+    local name="$1"
+    [[ -f "$USER_MAP_FILE" ]] || return 1
+
+    local line value
+    while IFS= read -r line; do
+        # Skip comments and blank lines
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        # Match alias= prefix
+        if [[ "$line" == "${name}="* ]]; then
+            value="${line#*=}"
+            if [[ "$value" == *:* ]]; then
+                GITHUB_USER="${value%%:*}"
+                BRANCH_USER="${value#*:}"
+            else
+                GITHUB_USER="$value"
+                BRANCH_USER="$value"
+            fi
+            return 0
+        fi
+    done < "$USER_MAP_FILE"
+    return 1
+}
+
 # Cache TTLs (seconds)
 # These values balance responsiveness with API rate limits.
 # Shorter TTLs = fresher data but more API calls
