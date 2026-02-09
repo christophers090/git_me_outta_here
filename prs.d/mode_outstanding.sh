@@ -290,7 +290,7 @@ _outstanding_render() {
 # Post-cache hook: update completion cache and prefetch PR data
 _outstanding_post_cache() {
     local fresh_json="$1"
-    update_completion_cache "$fresh_json"
+    update_completion_cache "$fresh_json" "$_OUTSTANDING_SUB_JSON"
     # Prefetch status in background (only if interactive)
     if is_interactive; then
         prefetch_all_pr_data "$fresh_json" &

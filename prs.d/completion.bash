@@ -56,10 +56,16 @@ _prs_completions() {
             local gh_user
             gh_user=$(gh api user -q .login 2>/dev/null)
             if [[ -n "$gh_user" ]]; then
-                gh pr list -R "${PRS_REPO}" --author "$gh_user" --state open \
-                    --json body,headRefName 2>/dev/null | \
-                    jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null \
-                    > "$cache_file"
+                {
+                    gh pr list -R "${PRS_REPO}" --author "$gh_user" --state open \
+                        --json body,headRefName 2>/dev/null | \
+                        jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null
+                    if [[ -n "${PRS_SUBMODULE_REPO:-}" ]]; then
+                        gh pr list -R "${PRS_SUBMODULE_REPO}" --author "$gh_user" --state open \
+                            --json body,headRefName 2>/dev/null | \
+                            jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null
+                    fi
+                } | sort -u > "$cache_file"
             fi
         ) &>/dev/null &
         disown

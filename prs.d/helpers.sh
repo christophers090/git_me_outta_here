@@ -10,8 +10,14 @@ error_msg() {
 # Usage: update_completion_cache "$prs_json"
 update_completion_cache() {
     local prs_json="$1"
+    local sub_json="${2:-}"
     local cache_file="/tmp/prs_topics_cache_${USER}"
-    echo "$prs_json" | jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null > "$cache_file"
+    {
+        echo "$prs_json" | jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null
+        if [[ -n "$sub_json" && "$sub_json" != "[]" ]]; then
+            echo "$sub_json" | jq -r '.[] | ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last))' 2>/dev/null
+        fi
+    } | sort -u > "$cache_file"
 }
 
 # Find PR by topic - eliminates duplicated lookup code
