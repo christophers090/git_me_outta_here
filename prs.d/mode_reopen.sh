@@ -17,29 +17,38 @@ run_reopen() {
         return 1
     fi
 
-    # Check for matching closed submodule PR
-    if [[ -n "$SUBMODULE_REPO" && "$SUBMODULE_MODE" != "true" ]]; then
-        local sub_json sub_info
-        sub_json=$(gh pr list -R "$SUBMODULE_REPO" --author "$GITHUB_USER" --state closed \
+    # Check for matching closed PR in the other repo
+    if [[ -n "$SUBMODULE_REPO" ]]; then
+        local other_repo other_label other_json other_info
+        if [[ "$SUBMODULE_MODE" == "true" ]]; then
+            other_repo="$MAIN_REPO"
+            other_label="main repo"
+        else
+            other_repo="$SUBMODULE_REPO"
+            other_label="submodule"
+        fi
+        other_json=$(gh pr list -R "$other_repo" --author "$GITHUB_USER" --state closed \
             --json number,title,url,headRefName,body 2>/dev/null || echo "[]")
-        sub_info=$(echo "$sub_json" | jq -r --arg topic "$topic" '
+        other_info=$(echo "$other_json" | jq -r --arg topic "$topic" '
             .[] |
             ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last)) as $t |
             select($t == $topic) |
             "\(.number)|\(.title)|\(.url)"' 2>/dev/null | head -1)
 
-        if [[ -n "$sub_info" ]]; then
-            local sub_number sub_title sub_url
-            IFS='|' read -r sub_number sub_title sub_url <<< "$sub_info"
+        if [[ -n "$other_info" ]]; then
+            local other_number other_title other_url
+            IFS='|' read -r other_number other_title other_url <<< "$other_info"
             echo ""
-            echo -e "${YELLOW}Found matching closed submodule PR:${NC} #${sub_number} - ${sub_title}"
-            read -p "Reopen submodule PR too? [y/N] " -n 1 -r
+            echo -e "${YELLOW}Found matching closed ${other_label} PR:${NC} #${other_number} - ${other_title}"
+            read -p "Reopen ${other_label} PR too? [y/N] " -n 1 -r
             echo
             if [[ $REPLY =~ ^[Yy]$ ]]; then
-                if gh pr reopen "$sub_number" -R "$SUBMODULE_REPO"; then
-                    echo -e "  ${CHECK} Reopened submodule PR #${sub_number}"
+                if gh pr reopen "$other_number" -R "$other_repo"; then
+                    echo -e "  ${CHECK} Reopened ${other_label} PR #${other_number}"
+                    rm -f "$MAIN_CACHE_DIR"/sub_outstanding.json "$MAIN_CACHE_DIR"/sub_outstanding.ts 2>/dev/null
+                    rm -f "$MAIN_CACHE_DIR"/outstanding.json "$MAIN_CACHE_DIR"/outstanding.ts 2>/dev/null
                 else
-                    echo -e "  ${CROSS} Failed to reopen submodule PR #${sub_number}"
+                    echo -e "  ${CROSS} Failed to reopen ${other_label} PR #${other_number}"
                     return 1
                 fi
             fi

@@ -269,6 +269,10 @@ if [[ "$THIS_MODE" == "true" ]]; then
   TOPIC="this"
 fi
 
+# Save original repo/cache for cross-repo lookups
+MAIN_REPO="$REPO"
+MAIN_CACHE_DIR="$CACHE_DIR"
+
 # Handle submodule mode - swap repo to submodule
 if [[ "$SUBMODULE_MODE" == "true" ]]; then
   if [[ -z "$SUBMODULE_REPO" ]]; then
@@ -276,16 +280,25 @@ if [[ "$SUBMODULE_MODE" == "true" ]]; then
     echo "Set PRS_SUBMODULE_REPO in prs.d/config.local.sh or re-run install.sh"
     exit 1
   fi
-  REPO="$SUBMODULE_REPO"
-  REPO_OWNER="$SUBMODULE_REPO_OWNER"
-  REPO_NAME="$SUBMODULE_REPO_NAME"
-  CACHE_DIR="${CACHE_DIR}/sub"
+
+  # Buildkite runs on main repo only - ignore -s flag
+  if [[ "$MODE" == build* ]]; then
+    echo -e "${YELLOW}Ignoring -s, running command on main repo${NC}"
+    SUBMODULE_MODE=false
+  else
+    REPO="$SUBMODULE_REPO"
+    REPO_OWNER="$SUBMODULE_REPO_OWNER"
+    REPO_NAME="$SUBMODULE_REPO_NAME"
+    CACHE_DIR="${CACHE_DIR}/sub"
+  fi
 fi
 
 # Export for mode scripts
 export COPY_TO_CLIPBOARD
 export NO_CACHE
 export SUBMODULE_MODE
+export MAIN_REPO
+export MAIN_CACHE_DIR
 
 # Source and run mode
 if [[ -f "$SCRIPT_DIR/custom/mode_${MODE}.sh" ]]; then
