@@ -23,6 +23,29 @@ find_pr() {
     local state="${2:-all}"
     local fields="${3:-number,title,url}"
 
+    # If topic is a PR number, look it up directly
+    if [[ "$topic" =~ ^[0-9]+$ ]]; then
+        local pr_json
+        pr_json=$(gh pr view "$topic" -R "$REPO" --json "$fields,state" 2>/dev/null || echo "{}")
+        if [[ -n "$pr_json" && "$pr_json" != "{}" ]]; then
+            local pr_state
+            pr_state=$(echo "$pr_json" | jq -r '.state' 2>/dev/null)
+            # Check state filter matches
+            local state_match=false
+            case "$state" in
+                all) state_match=true ;;
+                open) [[ "$pr_state" == "OPEN" ]] && state_match=true ;;
+                closed) [[ "$pr_state" == "CLOSED" ]] && state_match=true ;;
+                merged) [[ "$pr_state" == "MERGED" ]] && state_match=true ;;
+            esac
+            if [[ "$state_match" == "true" ]]; then
+                echo "$pr_json" | jq --argjson fields "$(echo "$fields" | jq -R 'split(",")')" \
+                    '[. | to_entries | map(select(.key as $k | $fields | index($k))) | from_entries]'
+                return 0
+            fi
+        fi
+    fi
+
     # First try exact branch match
     local branch="${BRANCH_USER}/${BRANCH_PREFIX}/${topic}"
     local result
@@ -223,4 +246,44 @@ copy_pr_to_clipboard() {
     review_ok=$(echo "$pr_json" | jq -r '.[0].reviewDecision == "APPROVED"')
 
     copy_to_clipboard "$number" "$title" "$url" "$ci_status" "$review_ok"
+}
+
+# ── Submodule helpers ──────────────────────────────────────────────
+
+# Fetch all open submodule PRs (single API call)
+# Returns JSON array with number, title, url, headRefName, reviewDecision, body
+fetch_submodule_prs() {
+    [[ -n "$SUBMODULE_REPO" ]] || return 0
+    gh pr list -R "$SUBMODULE_REPO" --author "$GITHUB_USER" --state open \
+        --json number,title,url,headRefName,reviewDecision,body 2>/dev/null || echo "[]"
+}
+
+# Get cached submodule PRs - fetches if stale
+# Returns JSON array
+get_cached_submodule_prs() {
+    [[ -n "$SUBMODULE_REPO" ]] || { echo "[]"; return 0; }
+
+    if cache_is_fresh "sub_outstanding" "$CACHE_TTL_OUTSTANDING"; then
+        cache_get "sub_outstanding"
+        return 0
+    fi
+
+    local result
+    result=$(fetch_submodule_prs)
+    if [[ -n "$result" && "$result" != "[]" ]]; then
+        cache_set "sub_outstanding" "$result"
+    fi
+    echo "$result"
+}
+
+# Parse submodule PRs into topic-keyed lookup lines
+# Input: submodule PRs JSON
+# Output: lines of "topic|number|title|url|review_ok" for each PR
+parse_submodule_pr_map() {
+    local sub_json="$1"
+    [[ -z "$sub_json" || "$sub_json" == "[]" ]] && return 0
+    echo "$sub_json" | jq -r '.[] |
+        ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last)) as $topic |
+        (.reviewDecision == "APPROVED") as $review_ok |
+        "\($topic)|\(.number)|\(.title)|\(.url)|\($review_ok)"'
 }

@@ -34,7 +34,7 @@ run_post_comment() {
 
     # Show prompt immediately, start PR lookup in background
     echo -e "${BOLD}Comment on ${file_path}:${line_number}${NC}"
-    echo -e "${DIM}Enter your comment (press Enter, then Ctrl+D when done):${NC}"
+    echo -e "${DIM}Enter your comment (Ctrl+D twice when done):${NC}"
 
     # Start PR lookup + commit SHA fetch in background
     local tmp_file
@@ -59,7 +59,7 @@ run_post_comment() {
         fi
 
         echo "${number}:${title}:${commit_sha}" > "$tmp_file"
-    ) &
+    ) </dev/null &
     local bg_pid=$!
 
     # Collect comment body while lookup happens
@@ -74,8 +74,8 @@ run_post_comment() {
         return 1
     fi
 
-    # Wait for lookup to complete
-    wait "$bg_pid"
+    # Wait for lookup to complete (|| true: exit status checked below)
+    wait "$bg_pid" || true
 
     # Check lookup result
     local lookup_result

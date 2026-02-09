@@ -166,6 +166,28 @@ _render_status() {
     else
         echo -e "  ${GREEN}All ${ci_passed} checks passed${NC}"
     fi
+
+    # Submodule PR line (if configured and not in submodule mode)
+    if [[ -n "$SUBMODULE_REPO" && "$SUBMODULE_MODE" != "true" ]]; then
+        local sub_json sub_review_sym
+        sub_json=$(get_cached_submodule_prs)
+        if [[ -n "$sub_json" && "$sub_json" != "[]" ]]; then
+            local sub_info
+            sub_info=$(echo "$sub_json" | jq -r --arg topic "$_STATUS_TOPIC" '
+                .[] |
+                ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last)) as $t |
+                select($t == $topic) |
+                "\(.number)|\(.url)|\(.reviewDecision == "APPROVED")"' | head -1)
+            if [[ -n "$sub_info" ]]; then
+                local s_number s_url s_review_ok
+                IFS='|' read -r s_number s_url s_review_ok <<< "$sub_info"
+                sub_review_sym="$CROSS"
+                [[ "$s_review_ok" == "true" ]] && sub_review_sym="$CHECK"
+                local sub_link="\e]8;;${s_url}\a${CYAN}#${s_number}${NC}\e]8;;\a"
+                echo -e "  Sub ${sub_link}: Reviews ${sub_review_sym}"
+            fi
+        fi
+    fi
     echo ""
 
     # Reviews section

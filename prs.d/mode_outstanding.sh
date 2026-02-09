@@ -25,6 +25,19 @@ _render_outstanding() {
         return 0
     fi
 
+    # Parse submodule PRs into lookup (topic -> "number|title|url|review_ok")
+    declare -A sub_pr_data
+    declare -a sub_all_topics=()
+    if [[ -n "$_OUTSTANDING_SUB_JSON" && "$_OUTSTANDING_SUB_JSON" != "[]" ]]; then
+        local sub_parsed
+        sub_parsed=$(parse_submodule_pr_map "$_OUTSTANDING_SUB_JSON")
+        while IFS='|' read -r s_topic s_number s_title s_url s_review_ok; do
+            [[ -z "$s_topic" || "$s_topic" == "null" ]] && continue
+            sub_pr_data["$s_topic"]="$s_number|$s_title|$s_url|$s_review_ok"
+            sub_all_topics+=("$s_topic")
+        done <<< "$sub_parsed"
+    fi
+
     # Parse PRs into structured data
     local parsed ci_context_pattern
     ci_context_pattern="${CI_CHECK_CONTEXT:-buildkite/}"
@@ -32,7 +45,7 @@ _render_outstanding() {
       .[] |
       ((.body | capture("Topic:\\s*(?<t>\\S+)") | .t) // (.headRefName | split("/") | last)) as $topic |
       ((.body | capture("Relative:\\s*(?<r>\\S+)") | .r) // "") as $relative |
-      ([.statusCheckRollup[] | select(.context | startswith($ci))] |
+      ([(.statusCheckRollup // [])[] | select(.context | startswith($ci))] |
         if length == 0 then "pass"
         elif ([.[] | select(.state == "FAILURE" or .state == "ERROR")] | length > 0) then "fail"
         elif ([.[] | select(.state == "PENDING")] | length > 0) then "pending"
@@ -126,6 +139,17 @@ _render_outstanding() {
 
         echo -e "${prefix}${BOLD}${pr_link}:${NC} ${title}"
         echo -e "${prefix}    CI ${ci_sym} | Reviews ${review_sym}"
+
+        # Submodule PR line (if one exists for this topic)
+        if [[ -n "${sub_pr_data[$topic]:-}" ]]; then
+            local s_number s_title s_url s_review_ok
+            IFS='|' read -r s_number s_title s_url s_review_ok <<< "${sub_pr_data[$topic]}"
+            local sub_review_sym="$CROSS"
+            [[ "$s_review_ok" == "true" ]] && sub_review_sym="$CHECK"
+            local sub_link="\e]8;;${s_url}\a${CYAN}#${s_number}${NC}\e]8;;\a"
+            echo -e "${prefix}    Sub ${sub_link}: Reviews ${sub_review_sym}"
+        fi
+
         echo -e "${prefix}    ${DIM}Topic:${NC} ${topic}"
         if [[ -n "$relative" && "$relative" != "main" ]]; then
             echo -e "${prefix}    ${DIM}Relative:${NC} ${relative}"
@@ -220,11 +244,43 @@ _render_outstanding() {
         _print_pr "$topic" ""
         echo ""
     done
+
+    # Orphaned submodule PRs - sub PRs with no matching main-repo topic
+    if [[ ${#sub_all_topics[@]} -gt 0 ]]; then
+        local -a orphans=()
+        for s_topic in "${sub_all_topics[@]}"; do
+            if [[ -z "${pr_data[$s_topic]:-}" ]]; then
+                orphans+=("$s_topic")
+            fi
+        done
+
+        if [[ ${#orphans[@]} -gt 0 ]]; then
+            echo ""
+            echo -e "${RED}${BOLD}────────────────────────────────────────────────────────${NC}"
+            echo -e "${RED}${BOLD}⚠ Orphaned Submodule PRs (no matching main PR)${NC}"
+            echo -e "${RED}${BOLD}────────────────────────────────────────────────────────${NC}"
+            echo ""
+
+            for s_topic in "${orphans[@]}"; do
+                local s_number s_title s_url s_review_ok
+                IFS='|' read -r s_number s_title s_url s_review_ok <<< "${sub_pr_data[$s_topic]}"
+                local sub_review_sym="$CROSS"
+                [[ "$s_review_ok" == "true" ]] && sub_review_sym="$CHECK"
+                local sub_link="\e]8;;${s_url}\a${RED}#${s_number}${NC}\e]8;;\a"
+
+                echo -e "${BOLD}${sub_link}:${NC} ${s_title}"
+                echo -e "    Reviews ${sub_review_sym}"
+                echo -e "    ${DIM}Topic:${NC} ${s_topic}"
+                echo ""
+            done
+        fi
+    fi
 }
 
 # Global state for rendering (set by run_outstanding, used by wrapper functions)
 _OUTSTANDING_FILTER_TOPIC=""
 _OUTSTANDING_FILTER_TOPICS_STR=""
+_OUTSTANDING_SUB_JSON=""
 
 # Render wrapper that uses global filter state
 _outstanding_render() {
@@ -264,6 +320,15 @@ run_outstanding() {
         echo -e "${DIM}Branch: ${current_branch}${NC}"
         echo ""
         filter_topic=""  # Clear so we use filter_topics array instead
+    fi
+
+    # Fetch submodule PRs fresh every time (still cache for status mode)
+    _OUTSTANDING_SUB_JSON=""
+    if [[ -n "$SUBMODULE_REPO" && "$SUBMODULE_MODE" != "true" ]]; then
+        _OUTSTANDING_SUB_JSON=$(fetch_submodule_prs)
+        if [[ -n "$_OUTSTANDING_SUB_JSON" && "$_OUTSTANDING_SUB_JSON" != "[]" ]]; then
+            cache_set "sub_outstanding" "$_OUTSTANDING_SUB_JSON"
+        fi
     fi
 
     # Set global state for render wrapper

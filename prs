@@ -20,7 +20,6 @@ usage() {
   echo "  prs                      List all your open PRs with CI/review status"
   echo "  prs <topic>              Show detailed status for a PR (CI, reviews, merge state)"
   echo "  prs --this               Show PRs for revup topics in current branch"
-  echo "  -s, --status <topic>     Explicit status view (same as prs <topic>)"
   echo "  -d, --diff <topic>       Show the diff for a PR"
   echo "  -f, --files <topic>      List files changed in a PR"
   echo "  -w, --web <topic>        Open the PR on GitHub in your browser"
@@ -59,6 +58,10 @@ usage() {
   echo "  -bcon <topic> <#> -n N   Show last N lines of console output"
   echo "  -bdump <topic>           Dump full console output from all failed jobs"
   echo ""
+  echo -e "${BOLD}Submodule${NC}"
+  echo "  -s, --sub                Target the submodule repo (combine with any command)"
+  echo "                           e.g., prs -s <topic>, prs -s --close <topic>"
+  echo ""
   echo -e "${BOLD}Other Options${NC}"
   echo "  -u, --user <username>    Query PRs for a different GitHub user (disables cache)"
   echo "  -h, --help               Show this help message"
@@ -81,6 +84,7 @@ TOPIC=""
 EXTRA_ARGS=()
 COPY_TO_CLIPBOARD=false
 THIS_MODE=false
+SUBMODULE_MODE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -93,8 +97,8 @@ while [[ $# -gt 0 ]]; do
     THIS_MODE=true
     shift
     ;;
-  -s | --status)
-    MODE="status"
+  -s | --sub | --submodule)
+    SUBMODULE_MODE=true
     shift
     ;;
   -d | --diff)
@@ -265,9 +269,23 @@ if [[ "$THIS_MODE" == "true" ]]; then
   TOPIC="this"
 fi
 
+# Handle submodule mode - swap repo to submodule
+if [[ "$SUBMODULE_MODE" == "true" ]]; then
+  if [[ -z "$SUBMODULE_REPO" ]]; then
+    echo -e "${RED}Error:${NC} No submodule repo configured"
+    echo "Set PRS_SUBMODULE_REPO in prs.d/config.local.sh or re-run install.sh"
+    exit 1
+  fi
+  REPO="$SUBMODULE_REPO"
+  REPO_OWNER="$SUBMODULE_REPO_OWNER"
+  REPO_NAME="$SUBMODULE_REPO_NAME"
+  CACHE_DIR="${CACHE_DIR}/sub"
+fi
+
 # Export for mode scripts
 export COPY_TO_CLIPBOARD
 export NO_CACHE
+export SUBMODULE_MODE
 
 # Source and run mode
 if [[ -f "$SCRIPT_DIR/custom/mode_${MODE}.sh" ]]; then

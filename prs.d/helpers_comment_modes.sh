@@ -33,7 +33,9 @@ get_pr_and_comment() {
 
 # Start PR lookup in background (for reply modes that need concurrent input)
 # Usage: start_pr_lookup_bg <topic> <comment_num> <tmp_file>
+# Sets: _BG_LOOKUP_PID (must be waited on by caller)
 # The result is written to tmp_file as: number:comment_id:root_id or ERROR:*
+_BG_LOOKUP_PID=""
 start_pr_lookup_bg() {
     local topic="$1"
     local comment_num="$2"
@@ -53,8 +55,8 @@ start_pr_lookup_bg() {
             exit 1
         fi
         echo "${number}:${info}" > "$tmp_file"
-    ) &
-    echo $!
+    ) </dev/null &
+    _BG_LOOKUP_PID=$!
 }
 
 # Check background lookup result

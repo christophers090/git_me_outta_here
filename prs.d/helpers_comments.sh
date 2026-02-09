@@ -55,17 +55,16 @@ get_ordered_comments() {
     '
 }
 
-# Get comment info by display number (filters out resolved comments)
+# Get comment info by root comment number (stable canonical numbering)
 # Usage: get_comment_info <pr_number> <comment_num> [topic]
-# Returns: "comment_id:root_id" or empty if not found
-# root_id equals comment_id for root comments, or parent id for replies
+# Returns: "root_id:root_id" (both same since we always target roots)
 # If topic is provided, uses cached comments data if available
 get_comment_info() {
     local pr_number="$1"
     local comment_num="$2"
     local topic="${3:-}"
 
-    local comments_json resolution_status
+    local comments_json
     local cache_key="comments_data_${topic}"
 
     # Try to use cached data if topic provided and cache is fresh
@@ -73,19 +72,16 @@ get_comment_info() {
         local cached
         cached=$(cache_get "$cache_key")
         comments_json=$(echo "$cached" | jq '.comments')
-        resolution_status=$(echo "$cached" | jq '.resolution')
     else
         comments_json=$(get_ordered_comments "$pr_number")
-        resolution_status=$(fetch_thread_resolution_status "$pr_number")
     fi
 
-    # Filter out resolved comments same way as display
-    echo "$comments_json" | jq -r --argjson n "$comment_num" --argjson res "$resolution_status" '
-        [$res | to_entries | map(select(.value == true)) | .[].key | tonumber] as $resolved_ids |
-        [.[] | select(
-            ((.in_reply_to_id == null) and ((.id | IN($resolved_ids[])) | not)) or
-            (((.in_reply_to_id == null) | not) and ((.in_reply_to_id | IN($resolved_ids[])) | not))
-        )] | .[$n - 1] | "\(.id):\(.in_reply_to_id // .id)"
+    # Index into root comments only (same numbering as display)
+    echo "$comments_json" | jq -r --argjson n "$comment_num" '
+        [.[] | select(.in_reply_to_id == null)] | .[$n - 1] |
+        if . == null then "null:null"
+        else "\(.id):\(.id)"
+        end
     '
 }
 

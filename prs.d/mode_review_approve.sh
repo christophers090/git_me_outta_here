@@ -8,7 +8,7 @@ run_review_approve() {
 
     # Show prompt immediately, start PR lookup in background
     echo -e "${BOLD}Approve PR${NC}"
-    echo -e "${DIM}Enter optional comment (press Enter, then Ctrl+D when done, or just Ctrl+D to skip):${NC}"
+    echo -e "${DIM}Enter optional comment (Ctrl+D twice when done, or just Ctrl+D to skip):${NC}"
 
     # Start PR lookup in background
     local tmp_file
@@ -24,7 +24,7 @@ run_review_approve() {
         number=$(pr_field "$pr_json" "number")
         title=$(pr_field "$pr_json" "title")
         echo "${number}:${title}" > "$tmp_file"
-    ) &
+    ) </dev/null &
     local bg_pid=$!
 
     # Collect body while lookup happens
@@ -32,8 +32,8 @@ run_review_approve() {
     body=$(cat)
     echo ""
 
-    # Wait for lookup to complete
-    wait "$bg_pid"
+    # Wait for lookup to complete (|| true: exit status checked below)
+    wait "$bg_pid" || true
 
     # Check lookup result
     local lookup_result

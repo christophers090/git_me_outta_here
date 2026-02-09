@@ -42,58 +42,74 @@ _render_comments() {
         return 0
     fi
 
-    # Now do filtering (heavier processing, but header is already visible)
-    local filtered_json count
+    # Annotate comments: number only roots (stable across resolves/new replies),
+    # mark resolved status per thread
+    local annotated_json
+    annotated_json=$(echo "$data" | jq '
+        .resolution as $res |
+        [$res | to_entries | map(select(.value == true)) | .[].key | tonumber] as $resolved_ids |
+        # Number roots sequentially, replies inherit parent root_num
+        [.comments[] | .id] as $all_ids |
+        [.comments[] | select(.in_reply_to_id == null) | .id] as $root_ids |
+        [.comments[] | {
+            comment: .,
+            is_root: (.in_reply_to_id == null),
+            root_num: (
+                if .in_reply_to_id == null then
+                    (. as $c | [$root_ids | to_entries[] | select(.value == $c.id) | .key][0] + 1)
+                else
+                    (. as $c | [$root_ids | to_entries[] | select(.value == $c.in_reply_to_id) | .key][0] + 1)
+                end
+            ),
+            resolved: (
+                if .in_reply_to_id == null then (.id | IN($resolved_ids[]))
+                else (.in_reply_to_id | IN($resolved_ids[]))
+                end
+            )
+        }]
+    ')
+
+    # Filter for display (but keep canonical root numbering)
+    local display_json
+    local root_count unresolved_root_count
+    root_count=$(echo "$annotated_json" | jq '[.[] | select(.is_root)] | length')
+
     if [[ "$show_resolved" == "true" ]]; then
-        filtered_json=$(echo "$data" | jq '.comments')
-        count="$total_count"
+        display_json="$annotated_json"
+        unresolved_root_count="$root_count"
     else
-        # Filter out resolved comments - get count and filtered JSON separately
-        local filter_result
-        filter_result=$(echo "$data" | jq '
-            .resolution as $res |
-            [$res | to_entries | map(select(.value == true)) | .[].key | tonumber] as $resolved_ids |
-            [.comments[] | select(
-                ((.in_reply_to_id == null) and ((.id | IN($resolved_ids[])) | not)) or
-                (((.in_reply_to_id == null) | not) and ((.in_reply_to_id | IN($resolved_ids[])) | not))
-            )]
-        ')
-        filtered_json="$filter_result"
-        count=$(echo "$filter_result" | jq 'length')
+        display_json=$(echo "$annotated_json" | jq '[.[] | select(.resolved == false)]')
+        unresolved_root_count=$(echo "$display_json" | jq '[.[] | select(.is_root)] | length')
     fi
 
-    if [[ "$count" -eq 0 ]]; then
+    if [[ "$unresolved_root_count" -eq 0 && "$show_resolved" == "false" ]]; then
         echo -e "${DIM}No unresolved comments${NC}"
         return 0
     fi
 
     local header_suffix=""
     if [[ "$show_resolved" == "false" ]]; then
-        local resolved_count=$((total_count - count))
-        if [[ "$resolved_count" -gt 0 ]]; then
-            header_suffix=" ${DIM}(${resolved_count} resolved hidden)${NC}"
+        local resolved_root_count=$((root_count - unresolved_root_count))
+        if [[ "$resolved_root_count" -gt 0 ]]; then
+            header_suffix=" ${DIM}(${resolved_root_count} resolved hidden)${NC}"
         fi
     fi
 
-    echo -e "${BOLD}Review Comments${NC} ${DIM}(${count})${NC}${header_suffix}"
+    echo -e "${BOLD}Review Comments${NC} ${DIM}(${unresolved_root_count})${NC}${header_suffix}"
     echo ""
 
-    # Display comments - use record separator to handle multi-line bodies
-    local comment_num=0
-    while IFS=$'\x1e' read -r -d $'\x1f' in_reply_to author created path line body; do
-        ((++comment_num))
-        if [[ -z "$in_reply_to" || "$in_reply_to" == "null" ]]; then
-            # Root comment
-            echo -e "${BOLD}#${comment_num}${NC}  ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
+    # Display comments - roots get their canonical number, replies are unnumbered
+    while IFS=$'\x1e' read -r -d $'\x1f' root_num is_root in_reply_to author created path line body; do
+        if [[ "$is_root" == "true" ]]; then
+            echo -e "${BOLD}#${root_num}${NC}  ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
             echo -e "    ${YELLOW}${path}${NC}${DIM}:${line}${NC}"
             echo "$body" | sed 's/^/    /'
         else
-            # Reply - show indented
             echo ""
-            echo -e "    ${DIM}└─${NC} ${BOLD}#${comment_num}${NC}  ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
+            echo -e "    ${DIM}└─${NC} ${CYAN}@${author}${NC} ${DIM}${created}${NC}"
             echo "$body" | sed 's/^/       /'
         fi
-    done < <(echo "$filtered_json" | jq -j '.[] | (([(.in_reply_to_id // ""), .user.login, (.created_at | split("T")[0]), .path, (.line // .original_line // "?")] | join("\u001e")) + "\u001e" + .body + "\u001f")')
+    done < <(echo "$display_json" | jq -j '.[] | (([(.root_num | tostring), (if .is_root then "true" else "false" end), (.comment.in_reply_to_id // "" | tostring), .comment.user.login, (.comment.created_at | split("T")[0]), .comment.path, (.comment.line // .comment.original_line // "?" | tostring)] | join("\u001e")) + "\u001e" + .comment.body + "\u001f")')
 }
 
 # Global state for comments mode (set by run_comments, used by wrapper functions)

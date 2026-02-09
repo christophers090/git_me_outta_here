@@ -8,7 +8,7 @@ run_review_request_changes() {
 
     # Show prompt immediately, start PR lookup in background
     echo -e "${BOLD}Request changes on PR${NC}"
-    echo -e "${DIM}Enter your review comment (press Enter, then Ctrl+D when done):${NC}"
+    echo -e "${DIM}Enter your review comment (Ctrl+D twice when done):${NC}"
 
     # Start PR lookup in background
     local tmp_file
@@ -24,7 +24,7 @@ run_review_request_changes() {
         number=$(pr_field "$pr_json" "number")
         title=$(pr_field "$pr_json" "title")
         echo "${number}:${title}" > "$tmp_file"
-    ) &
+    ) </dev/null &
     local bg_pid=$!
 
     # Collect body while lookup happens
@@ -39,8 +39,8 @@ run_review_request_changes() {
         return 1
     fi
 
-    # Wait for lookup to complete
-    wait "$bg_pid"
+    # Wait for lookup to complete (|| true: exit status checked below)
+    wait "$bg_pid" || true
 
     # Check lookup result
     local lookup_result
