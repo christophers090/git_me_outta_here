@@ -8,8 +8,72 @@ _STATUS_FIELDS="number,title,state,url,reviewDecision,reviewRequests,reviews,sta
 _STATUS_TOPIC=""
 
 # Fetch PR JSON for a topic
+# Two-phase: find PR number cheaply, then fetch heavy fields for just that one PR.
+# Before: gh pr list --json <11 heavy fields> for ALL user's PRs (~3.4s)
+# After: cache lookup (0ms) or lightweight gh pr list (~1s) + gh pr view (~1s)
 _fetch_status() {
-    find_pr "$_STATUS_TOPIC" "all" "$_STATUS_FIELDS"
+    local pr_number=""
+
+    # If topic is already a PR number, use directly
+    if [[ "$_STATUS_TOPIC" =~ ^[0-9]+$ ]]; then
+        pr_number="$_STATUS_TOPIC"
+    else
+        # Try to find PR number from outstanding cache (no API call)
+        local outstanding
+        outstanding=$(cache_get "outstanding")
+        if [[ -n "$outstanding" && "$outstanding" != "[]" ]]; then
+            pr_number=$(echo "$outstanding" | jq -r --arg topic "$_STATUS_TOPIC" '
+                ($topic | gsub("(?<c>[.+*?^${}()|\\[\\]])"; "\\\(.c)")) as $escaped |
+                [.[] | select(
+                    (.headRefName | endswith("/" + $topic)) or
+                    (.body | test("Topic:\\s*" + $escaped + "\\b"))
+                )] | .[0].number // empty' 2>/dev/null)
+        fi
+
+        # Fall back to lightweight API lookup (just number, no heavy fields)
+        if [[ -z "$pr_number" ]]; then
+            local lookup
+            lookup=$(find_pr "$_STATUS_TOPIC" "all" "number")
+            pr_number=$(echo "$lookup" | jq -r '.[0].number // empty' 2>/dev/null)
+        fi
+    fi
+
+    # Fetch full status data for just this one PR
+    if [[ -n "$pr_number" ]]; then
+        # Start queue check in parallel
+        local queue_tmp
+        queue_tmp=$(mktemp)
+        (gh api graphql -f query='{
+          repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
+            mergeQueue(branch: "main") {
+              entries(first: 50) {
+                nodes {
+                  position
+                  pullRequest { number }
+                }
+              }
+            }
+          }
+        }' --jq ".data.repository.mergeQueue.entries.nodes[] | select(.pullRequest.number == ${pr_number}) | .position" > "$queue_tmp" 2>/dev/null) &
+        local queue_pid=$!
+
+        local result
+        result=$(gh pr view "$pr_number" -R "$REPO" --json "$_STATUS_FIELDS" 2>/dev/null)
+
+        # Collect queue result
+        wait "$queue_pid" 2>/dev/null
+        local queue_pos
+        queue_pos=$(<"$queue_tmp")
+        rm -f "$queue_tmp"
+        cache_set "queue_pos_${_STATUS_TOPIC}" "${queue_pos:-}"
+
+        if [[ -n "$result" ]]; then
+            echo "[$result]"
+            return 0
+        fi
+    fi
+
+    echo "[]"
 }
 
 # Check if status data is empty/invalid
@@ -42,39 +106,35 @@ _status_not_found() {
     pr_not_found "$_STATUS_TOPIC"
     echo ""
 
-    # Try to find similar topics (use outstanding cache if available)
-    local similar outstanding_data
-    if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
-        outstanding_data=$(cache_get "outstanding")
-    else
-        outstanding_data=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state open --json headRefName,number,title 2>/dev/null)
+    # Try to find similar topics from cache only (no extra API call)
+    local similar=""
+    local outstanding_data
+    outstanding_data=$(cache_get "outstanding")
+    if [[ -n "$outstanding_data" ]]; then
+        similar=$(echo "$outstanding_data" | jq -r --arg topic "$_STATUS_TOPIC" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
     fi
-    similar=$(echo "$outstanding_data" | jq -r --arg topic "$_STATUS_TOPIC" '.[] | select(.headRefName | ascii_downcase | contains($topic | ascii_downcase)) | (.headRefName | split("/") | last) as $t | "  \($t) - #\(.number): \(.title)"' 2>/dev/null || true)
 
     if [[ -n "$similar" ]]; then
         echo -e "${YELLOW}Similar topics:${NC}"
         echo "$similar"
-    else
-        echo -e "${BOLD}Your open PRs:${NC}"
-        if [[ -n "$outstanding_data" ]]; then
-            echo "$outstanding_data" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
-        else
-            gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-        fi
     fi
 }
 
 # Fetch and cache extra status data (comments + automerge) after getting PR JSON
+# Runs in background and detached - completes after prs exits, results cached for next run
 _post_cache_status() {
     local pr_json="$1"
-    local pr_number comments automerge
+    local topic="$_STATUS_TOPIC"
+    (
+        local pr_number comments automerge
+        pr_number=$(echo "$pr_json" | jq -r '.[0].number')
+        comments=$(get_unresolved_count "$pr_number")
+        automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
 
-    pr_number=$(echo "$pr_json" | jq -r '.[0].number')
-    comments=$(get_unresolved_count "$pr_number")
-    automerge=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.auto_merge != null' 2>/dev/null || echo "false")
-
-    cache_set "comments_${_STATUS_TOPIC}" "$comments"
-    cache_set "automerge_${_STATUS_TOPIC}" "$automerge"
+        cache_set "comments_${topic}" "$comments"
+        cache_set "automerge_${topic}" "$automerge"
+    ) &>/dev/null &
+    disown  # Detach from shell so cleanup trap doesn't kill it
 }
 
 # Render status from PR JSON
@@ -87,9 +147,10 @@ _render_status() {
     fi
 
     # Read cached extras (may be empty on first render before post_cache runs)
-    local cached_comment_count cached_auto_merge
+    local cached_comment_count cached_auto_merge cached_queue_pos
     cached_comment_count=$(cache_get "comments_${_STATUS_TOPIC}")
     cached_auto_merge=$(cache_get "automerge_${_STATUS_TOPIC}")
+    cached_queue_pos=$(cache_get "queue_pos_${_STATUS_TOPIC}")
 
     # Extract ALL data in ONE jq call - output as newline-separated for read
     local number title state url review_decision merge_state is_draft auto_merge buildkite_url
@@ -170,7 +231,7 @@ _render_status() {
     # Submodule PR line (if configured and not in submodule mode)
     if [[ -n "$SUBMODULE_REPO" && "$SUBMODULE_MODE" != "true" ]]; then
         local sub_json sub_review_sym
-        sub_json=$(get_cached_submodule_prs)
+        sub_json=$(cache_get "sub_outstanding")
         if [[ -n "$sub_json" && "$sub_json" != "[]" ]]; then
             local sub_info
             sub_info=$(echo "$sub_json" | jq -r --arg topic "$_STATUS_TOPIC" '
@@ -231,17 +292,17 @@ _render_status() {
         echo -e "  Changes requested by: ${RED}${change_requesters}${NC}"
     fi
 
-    # Show unresolved comments (use cached if available, otherwise show placeholder)
+    # Show unresolved comments (use cached if available, otherwise placeholder until refresh)
     local unresolved_count
     if [[ -n "$cached_comment_count" ]]; then
         unresolved_count="$cached_comment_count"
+        if [[ "$unresolved_count" -gt 0 ]]; then
+            echo -e "  Unresolved comments: ${YELLOW}${unresolved_count}${NC}"
+        else
+            echo -e "  Unresolved comments: ${GREEN}0${NC}"
+        fi
     else
-        unresolved_count=$(get_unresolved_count "$number")
-    fi
-    if [[ "$unresolved_count" -gt 0 ]]; then
-        echo -e "  Unresolved comments: ${YELLOW}${unresolved_count}${NC}"
-    else
-        echo -e "  Unresolved comments: ${GREEN}0${NC}"
+        echo -e "  Unresolved comments: ${DIM}...${NC}"
     fi
     echo ""
 
@@ -249,7 +310,11 @@ _render_status() {
     echo -e "${BOLD}Merge Status:${NC}"
     case "$merge_state" in
         "CLEAN")
-            echo -e "  State: ${GREEN}Ready to merge${NC}"
+            if [[ -n "$cached_queue_pos" ]]; then
+                echo -e "  State: ${GREEN}In merge queue${NC} (position #${cached_queue_pos})"
+            else
+                echo -e "  State: ${GREEN}Ready to merge${NC}"
+            fi
             ;;
         "BLOCKED")
             echo -e "  State: ${RED}BLOCKED${NC}"
@@ -284,11 +349,7 @@ _render_status() {
 # Show all open PRs when no topic given
 _show_all_prs() {
     echo -e "${BOLD}Your open PRs:${NC}"
-    if cache_is_fresh "outstanding" "$CACHE_TTL_OUTSTANDING"; then
-        cache_get "outstanding" | jq -r '.[] | "#\(.number)\t\(.title)\t\(.url)"' | column -t -s $'\t'
-    else
-        gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
-    fi
+    gh pr list -R "$REPO" --author "$GITHUB_USER" --state open
 }
 
 run_status() {
@@ -311,7 +372,7 @@ run_status() {
         "_render_status" \
         "Fetching PR..." \
         "_post_cache_status" \
-        '_status_is_empty "$data"'
+        "_status_is_empty"
     local result=$?
 
     # Clean up hooks

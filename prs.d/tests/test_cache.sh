@@ -61,36 +61,6 @@ test_cache_get_missing() {
     [[ -z "$result" ]]
 }
 
-test_cache_is_fresh_valid() {
-    local key="fresh_test"
-    cache_set "$key" '{"test": true}'
-    cache_is_fresh "$key" 60
-}
-
-test_cache_is_fresh_stale() {
-    local key="stale_test"
-    cache_set "$key" '{"test": true}'
-    # Backdate the timestamp
-    echo "1000000000" > "$CACHE_DIR/${key}.ts"
-    ! cache_is_fresh "$key" 60
-}
-
-test_cache_is_fresh_missing() {
-    ! cache_is_fresh "nonexistent_999" 60
-}
-
-test_cache_age() {
-    local key="age_test"
-    cache_set "$key" '{"test": true}'
-    local age=$(cache_age "$key")
-    [[ "$age" -ge 0 && "$age" -le 2 ]]
-}
-
-test_cache_age_missing() {
-    local age=$(cache_age "missing_age_test")
-    [[ "$age" == "-1" ]]
-}
-
 test_invalidate_pr_caches() {
     local topic="test_topic"
     cache_set "pr_${topic}_all" '{"pr": 1}'
@@ -150,11 +120,6 @@ test_cached_find_pr_field_isolation() {
 
 run_test "cache_set/cache_get round-trip" test_cache_set_get
 run_test "cache_get returns empty for missing" test_cache_get_missing
-run_test "cache_is_fresh with fresh data" test_cache_is_fresh_valid
-run_test "cache_is_fresh with stale data" test_cache_is_fresh_stale
-run_test "cache_is_fresh with missing cache" test_cache_is_fresh_missing
-run_test "cache_age returns correct age" test_cache_age
-run_test "cache_age returns -1 for missing" test_cache_age_missing
 run_test "invalidate_pr_caches removes correct files" test_invalidate_pr_caches
 run_test "cache_init creates directory" test_cache_init
 run_test "is_interactive function exists" test_is_interactive

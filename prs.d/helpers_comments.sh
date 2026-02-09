@@ -3,6 +3,7 @@
 
 # Get resolution status for all review threads
 # Returns JSON map of root_comment_id -> isResolved
+# Note: limited to first 100 threads (no pagination); PRs with >100 threads will be truncated
 fetch_thread_resolution_status() {
     local pr_number="$1"
 
@@ -65,14 +66,16 @@ get_comment_info() {
     local topic="${3:-}"
 
     local comments_json
-    local cache_key="comments_data_${topic}"
 
-    # Try to use cached data if topic provided and cache is fresh
-    if [[ -n "$topic" ]] && cache_is_fresh "$cache_key" "$CACHE_TTL_COMMENTS"; then
+    # Use cached data if available, otherwise fetch fresh
+    if [[ -n "$topic" ]]; then
         local cached
-        cached=$(cache_get "$cache_key")
-        comments_json=$(echo "$cached" | jq '.comments')
-    else
+        cached=$(cache_get "comments_data_${topic}")
+        if [[ -n "$cached" ]]; then
+            comments_json=$(echo "$cached" | jq '.comments')
+        fi
+    fi
+    if [[ -z "$comments_json" ]]; then
         comments_json=$(get_ordered_comments "$pr_number")
     fi
 

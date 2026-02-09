@@ -5,7 +5,7 @@ run_post_comment() {
     local topic="$1"
     local file_line="${2:-}"
 
-    require_topic "post_comment" "$topic" || return 1
+    require_topic "post_comment" "$topic" "--pc" || return 1
 
     # Validate file:line argument
     if [[ -z "$file_line" ]]; then
@@ -58,7 +58,7 @@ run_post_comment() {
             exit 1
         fi
 
-        echo "${number}:${title}:${commit_sha}" > "$tmp_file"
+        printf '%s\x1e%s\x1e%s' "$number" "$title" "$commit_sha" > "$tmp_file"
     ) </dev/null &
     local bg_pid=$!
 
@@ -90,11 +90,9 @@ run_post_comment() {
         return 1
     fi
 
-    # Parse: number:title:commit_sha
-    local pr_number="${lookup_result%%:*}"
-    local rest="${lookup_result#*:}"
-    local pr_title="${rest%%:*}"
-    local commit_sha="${rest##*:}"
+    # Parse: number<RS>title<RS>commit_sha (RS=\x1e avoids colon-in-title bug)
+    local pr_number pr_title commit_sha
+    IFS=$'\x1e' read -r pr_number pr_title commit_sha <<< "$lookup_result"
 
     # Post inline comment via REST API
     if gh api "repos/${REPO}/pulls/${pr_number}/comments" \

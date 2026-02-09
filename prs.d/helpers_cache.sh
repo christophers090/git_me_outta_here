@@ -3,7 +3,6 @@
 
 # Cache configuration
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/prs"
-# TTL constants defined in config.sh
 
 # Initialize cache directory
 cache_init() {
@@ -28,68 +27,25 @@ cache_set() {
     local key="$1"
     local data="$2"
     cache_init
-    echo "$data" > "$CACHE_DIR/${key}.json"
-    date +%s > "$CACHE_DIR/${key}.ts"
-}
-
-# Check if cache is fresh (within TTL)
-# Returns: 0 if fresh, 1 if stale/missing
-cache_is_fresh() {
-    # Never use cache if NO_CACHE is set (e.g., when using -u flag)
-    [[ -n "${NO_CACHE:-}" ]] && return 1
-
-    local key="$1"
-    local ttl="$2"
+    local json_file="$CACHE_DIR/${key}.json"
     local ts_file="$CACHE_DIR/${key}.ts"
-    local cache_file="$CACHE_DIR/${key}.json"
-
-    [[ -f "$cache_file" && -f "$ts_file" ]] || return 1
-
-    local cached_time now age
-    cached_time=$(cat "$ts_file")
-    now=$(date +%s)
-    age=$((now - cached_time))
-
-    [[ $age -lt $ttl ]]
+    # Atomic writes: write to tmp, then mv (rename is atomic on same FS)
+    echo "$data" > "${json_file}.tmp" && mv "${json_file}.tmp" "$json_file"
+    date +%s > "${ts_file}.tmp" && mv "${ts_file}.tmp" "$ts_file"
 }
 
-# Get cache age in seconds (or -1 if no cache)
-cache_age() {
-    local key="$1"
-    local ts_file="$CACHE_DIR/${key}.ts"
-
-    if [[ -f "$ts_file" ]]; then
-        local cached_time now
-        cached_time=$(cat "$ts_file")
-        now=$(date +%s)
-        echo $((now - cached_time))
-    else
-        echo -1
-    fi
-}
-
-# Cached wrapper for find_pr - avoids repeated API calls
+# Cached wrapper for find_pr - always fetches fresh, caches result
 # Usage: cached_find_pr <topic> [state] [fields]
-# Returns: cached PR JSON if fresh, otherwise fetches and caches
 cached_find_pr() {
     local topic="$1"
     local state="${2:-all}"
     local fields="${3:-number,title,url}"
-    # Include fields in cache key to avoid returning incomplete data
     local fields_hash="${fields//,/_}"
     local cache_key="pr_${topic}_${state}_${fields_hash}"
 
-    # Return from cache if fresh
-    if cache_is_fresh "$cache_key" "$CACHE_TTL_PR_LOOKUP"; then
-        cache_get "$cache_key"
-        return 0
-    fi
-
-    # Fetch fresh data using the original find_pr
     local result
     result=$(find_pr "$topic" "$state" "$fields")
 
-    # Cache if we got valid results
     if [[ -n "$result" && "$result" != "[]" ]]; then
         cache_set "$cache_key" "$result"
     fi
@@ -156,6 +112,27 @@ fetch_with_spinner() {
     fi
 }
 
+# Count visual terminal lines (accounts for line wrapping from long lines)
+# Uses terminal width to calculate how many screen rows text actually occupies.
+_count_visual_lines() {
+    local text="$1"
+    local cols
+    cols=$(tput cols 2>/dev/null || echo 80)
+    # Strip all ANSI codes in one sed pass (instead of per-line fork)
+    local stripped
+    stripped=$(printf '%s' "$text" | sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g; s/\x1b\\]8;;[^\x07]*\x07//g')
+    local total=0
+    while IFS= read -r line; do
+        local len=${#line}
+        if [[ $len -le $cols ]]; then
+            total=$((total + 1))
+        else
+            total=$((total + (len + cols - 1) / cols))
+        fi
+    done <<< "$stripped"
+    echo "$total"
+}
+
 # Hook globals for display_with_refresh customization
 # Set these before calling display_with_refresh(), reset to "" after
 DISPLAY_EARLY_EXIT_FN=""    # Called first; return 0 to exit early (e.g., yank mode)
@@ -200,9 +177,9 @@ display_with_refresh() {
     _is_empty() {
         local data="$1"
         if [[ -n "$empty_check" ]]; then
-            eval "$empty_check"
+            "$empty_check" "$data"
         else
-            [[ -z "$data" || "$data" == "[]" ]]
+            [[ -z "$data" ]]
         fi
     }
 
@@ -211,9 +188,9 @@ display_with_refresh() {
         local cached_output
         cached_output=$("$render_fn" "$cached_data")
 
-        # Count lines for reliable cursor movement
+        # Count visual lines (accounts for terminal line wrapping)
         local cached_lines
-        cached_lines=$(echo "$cached_output" | wc -l)
+        cached_lines=$(_count_visual_lines "$cached_output")
 
         # Print cached output + loading indicator
         echo "$cached_output"
@@ -310,40 +287,28 @@ prefetch_all_pr_data() {
         "\(.number)|\($topic)|\(.title)|\(.url)"
     ' 2>/dev/null) || return 0
 
-    # Spawn background jobs to prefetch each PR's data
+    # Spawn background jobs to prefetch each PR's status and comments
     while IFS='|' read -r number topic title url; do
         [[ -z "$topic" || "$topic" == "null" ]] && continue
 
-        # Check if both caches are fresh - skip if so
-        local need_status="" need_comments=""
-        cache_is_fresh "status_${topic}" "$CACHE_TTL_STATUS" || need_status=1
-        cache_is_fresh "comments_data_${topic}" "$CACHE_TTL_COMMENTS" || need_comments=1
-
-        [[ -z "$need_status" && -z "$need_comments" ]] && continue
-
-        # Spawn background job for this PR
         (
-            # Prefetch status if needed - use PR number directly for accurate lookup
-            if [[ -n "$need_status" ]]; then
-                local status_json
-                status_json=$(gh pr view "$number" -R "$REPO" \
-                    --json number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft \
-                    2>/dev/null)
+            # Prefetch status
+            local status_json
+            status_json=$(gh pr view "$number" -R "$REPO" \
+                --json number,title,state,url,reviewDecision,reviewRequests,reviews,statusCheckRollup,mergeStateStatus,labels,isDraft \
+                2>/dev/null)
 
-                if [[ -n "$status_json" ]]; then
-                    # Wrap in array to match expected format
-                    cache_set "status_${topic}" "[$status_json]"
-                fi
+            if [[ -n "$status_json" ]]; then
+                cache_set "status_${topic}" "[$status_json]"
             fi
 
-            # Prefetch comments if needed
-            if [[ -n "$need_comments" && -n "$number" ]]; then
+            # Prefetch comments
+            if [[ -n "$number" ]]; then
                 local comments_json resolution_status
                 comments_json=$(get_ordered_comments "$number" 2>/dev/null)
                 resolution_status=$(fetch_thread_resolution_status "$number" 2>/dev/null)
 
                 if [[ -n "$comments_json" && -n "$resolution_status" ]]; then
-                    # Build full comments data structure
                     local data
                     data=$(jq -n \
                         --argjson number "$number" \
@@ -355,14 +320,14 @@ prefetch_all_pr_data() {
 
                     cache_set "comments_data_${topic}" "$data"
 
-                    # Also cache unresolved count for status display
                     local unresolved_count
                     unresolved_count=$(echo "$resolution_status" | jq '[to_entries[] | select(.value == false)] | length')
                     cache_set "comments_${topic}" "$unresolved_count"
                 fi
             fi
         ) &>/dev/null &
+        _PREFETCH_PIDS+=($!)
     done <<< "$pr_data"
 
-    # Don't wait - let background jobs complete on their own
+    # Don't wait - background jobs cleaned up via _prs_cleanup trap on exit
 }

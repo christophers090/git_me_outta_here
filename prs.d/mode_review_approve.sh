@@ -4,7 +4,7 @@
 run_review_approve() {
     local topic="$1"
 
-    require_topic "review_approve" "$topic" || return 1
+    require_topic "review_approve" "$topic" "-pa" || return 1
 
     # Show prompt immediately, start PR lookup in background
     echo -e "${BOLD}Approve PR${NC}"
@@ -23,7 +23,7 @@ run_review_approve() {
         local number title
         number=$(pr_field "$pr_json" "number")
         title=$(pr_field "$pr_json" "title")
-        echo "${number}:${title}" > "$tmp_file"
+        printf '%s\x1e%s' "$number" "$title" > "$tmp_file"
     ) </dev/null &
     local bg_pid=$!
 
@@ -45,8 +45,8 @@ run_review_approve() {
         return 1
     fi
 
-    local pr_number="${lookup_result%%:*}"
-    local pr_title="${lookup_result#*:}"
+    local pr_number pr_title
+    IFS=$'\x1e' read -r pr_number pr_title <<< "$lookup_result"
 
     # Submit approval
     local cmd=(gh pr review "$pr_number" -R "$REPO" --approve)

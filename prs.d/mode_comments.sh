@@ -161,7 +161,7 @@ run_comments() {
         esac
     done
 
-    require_topic "comments" "$topic" || return 1
+    require_topic "comments" "$topic" "-c" || return 1
 
     # Set global state for wrapper functions
     _COMMENTS_TOPIC="$topic"

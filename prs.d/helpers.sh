@@ -52,27 +52,20 @@ find_pr() {
         fi
     fi
 
-    # First try exact branch match
-    local branch="${BRANCH_USER}/${BRANCH_PREFIX}/${topic}"
+    # Search by author - match branch name first, fall back to body Topic: field
+    local author_prs
+    author_prs=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state "$state" -L 200 \
+        --json "$fields,headRefName,body" 2>/dev/null || echo "[]")
+
     local result
-    result=$(gh pr list -R "$REPO" --head "$branch" --state "$state" --limit 1 \
-        --json "$fields" 2>/dev/null || echo "[]")
-
-    # If no results, try searching by author with topic in branch name
-    if [[ "$(echo "$result" | jq 'length')" -eq 0 ]]; then
-        result=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state "$state" \
-            --json "$fields,headRefName" 2>/dev/null \
-            | jq --arg topic "$topic" '[.[] | select(.headRefName | endswith("/" + $topic))] | .[0:1] | map(del(.headRefName))' \
-            2>/dev/null || echo "[]")
-    fi
-
-    # If still no results, try searching by topic in PR body
-    if [[ "$(echo "$result" | jq 'length')" -eq 0 ]]; then
-        result=$(gh pr list -R "$REPO" --author "$GITHUB_USER" --state "$state" \
-            --json "$fields,body" 2>/dev/null \
-            | jq --arg topic "$topic" '[.[] | select(.body | test("Topic:\\s*" + $topic + "\\b"))] | .[0:1] | map(del(.body))' \
-            2>/dev/null || echo "[]")
-    fi
+    result=$(echo "$author_prs" \
+        | jq --arg topic "$topic" '
+            ($topic | gsub("(?<c>[.+*?^${}()|\\[\\]])"; "\\\(.c)")) as $escaped |
+            ([.[] | select(.headRefName | endswith("/" + $topic))] | .[0:1]) as $by_branch |
+            if ($by_branch | length) > 0 then $by_branch
+            else [.[] | select(.body | test("Topic:\\s*" + $escaped + "\\b"))] | .[0:1]
+            end | map(del(.headRefName, .body))' \
+        2>/dev/null || echo "[]")
 
     echo "$result"
 }
@@ -158,9 +151,12 @@ print_pr_header() {
 require_topic() {
     local mode="$1"
     local topic="$2"
+    local flag="${3:-}"
     if [[ -z "$topic" ]]; then
         echo -e "${RED}Error:${NC} Topic required for ${mode}"
-        echo "Usage: prs -${mode:0:1} <topic>"
+        if [[ -n "$flag" ]]; then
+            echo "Usage: prs ${flag} <topic>"
+        fi
         return 1
     fi
 }
@@ -184,10 +180,16 @@ format_duration() {
 # Open URL in browser (cross-platform)
 open_url() {
     local url="$1"
-    xdg-open "$url" 2>/dev/null || open "$url" 2>/dev/null || {
+    local err
+    if err=$(xdg-open "$url" 2>&1); then
+        return 0
+    elif err=$(open "$url" 2>&1); then
+        return 0
+    else
         echo -e "${YELLOW}Could not open browser. URL:${NC} $url"
+        [[ -n "$err" ]] && echo -e "${DIM}${err}${NC}"
         return 1
-    }
+    fi
 }
 
 # Require a comment number argument
@@ -264,15 +266,10 @@ fetch_submodule_prs() {
         --json number,title,url,headRefName,reviewDecision,body 2>/dev/null || echo "[]"
 }
 
-# Get cached submodule PRs - fetches if stale
+# Get submodule PRs - always fetches fresh, caches result
 # Returns JSON array
 get_cached_submodule_prs() {
     [[ -n "$SUBMODULE_REPO" ]] || { echo "[]"; return 0; }
-
-    if cache_is_fresh "sub_outstanding" "$CACHE_TTL_OUTSTANDING"; then
-        cache_get "sub_outstanding"
-        return 0
-    fi
 
     local result
     result=$(fetch_submodule_prs)

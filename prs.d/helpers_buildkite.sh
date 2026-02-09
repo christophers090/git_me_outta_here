@@ -1,6 +1,24 @@
 # prs Buildkite helpers - shared functions for Buildkite operations
 # shellcheck shell=bash
 
+# Extract BK_BUILD_URL from PR JSON statusCheckRollup
+# Sets global: BK_BUILD_URL
+extract_bk_build_url() {
+    local pr_json="$1"
+    BK_BUILD_URL=$(echo "$pr_json" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+}
+
+# Get Buildkite API token from config
+bk_get_token() {
+    local token
+    token=$(grep 'api_token:' ~/.config/bk.yaml 2>/dev/null | head -1 | awk '{print $2}')
+    if [[ -z "$token" ]]; then
+        echo -e "${RED}Could not find Buildkite API token in ~/.config/bk.yaml${NC}" >&2
+        return 1
+    fi
+    echo "$token"
+}
+
 # Get build info for a topic. Sets globals: BK_BUILD_NUMBER, BK_BUILD_JSON, BK_BUILD_URL
 # Returns 1 if no build found
 # Usage: get_build_for_topic <topic> [pr_number] [pr_title]
@@ -21,7 +39,7 @@ get_build_for_topic() {
 
         number=$(pr_field "$pr_json" "number")
         title=$(pr_field "$pr_json" "title")
-        BK_BUILD_URL=$(echo "$pr_json" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+        extract_bk_build_url "$pr_json"
     fi
 
     if [[ -z "$BK_BUILD_URL" ]]; then
@@ -53,6 +71,10 @@ get_build_for_topic() {
 # Returns 1 if job not found
 get_job_by_number() {
     local job_num="$1"
+    if ! [[ "$job_num" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error:${NC} Job number must be numeric: $job_num" >&2
+        return 1
+    fi
     local current_num=0
 
     BK_JOB_ID=""

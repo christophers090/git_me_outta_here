@@ -5,7 +5,7 @@ run_comment_reply() {
     local topic="$1"
     local comment_num="${2:-}"
 
-    require_topic "comment_reply" "$topic" || return 1
+    require_topic "comment_reply" "$topic" "-cr" || return 1
     require_comment_num "$comment_num" "-cr" || return 1
 
     # Show prompt immediately, do lookups in background

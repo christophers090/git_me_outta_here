@@ -22,7 +22,7 @@ run_build_cancel() {
     get_pr_or_fail "$topic" "build_cancel" "all" "number,title,statusCheckRollup" || return 1
     pr_basics
 
-    BK_BUILD_URL=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+    extract_bk_build_url "$PR_JSON"
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1

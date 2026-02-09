@@ -6,8 +6,8 @@ run_buildkite() {
     get_pr_or_fail "$topic" "buildkite" "all" "number,title,statusCheckRollup" || return 1
     pr_basics
 
-    local buildkite_url
-    buildkite_url=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+    extract_bk_build_url "$PR_JSON"
+    local buildkite_url="$BK_BUILD_URL"
 
     if [[ -z "$buildkite_url" ]]; then
         echo -e "${RED}No Buildkite URL found for PR #${PR_NUMBER}:${NC} ${PR_TITLE}"

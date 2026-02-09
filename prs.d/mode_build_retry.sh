@@ -2,8 +2,8 @@
 # shellcheck shell=bash
 
 run_build_retry() {
-    local topic="$1"
-    local job_num="$2"
+    local topic="${1:-}"
+    local job_num="${2:-}"
 
     if [[ -z "$topic" ]]; then
         echo -e "${RED}Error:${NC} Topic required for build_retry"
@@ -22,7 +22,7 @@ run_build_retry() {
     get_pr_or_fail "$topic" "build_retry" "all" "number,title,statusCheckRollup" || return 1
     pr_basics
 
-    BK_BUILD_URL=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+    extract_bk_build_url "$PR_JSON"
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1

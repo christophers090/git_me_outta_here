@@ -6,6 +6,13 @@ GREEN='\033[0;32m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# Detect user's shell rc file
+if [[ "${SHELL:-}" == */zsh ]]; then
+    RC_FILE="$HOME/.zshrc"
+else
+    RC_FILE="$HOME/.bashrc"
+fi
+
 echo -e "${BOLD}prs installer${NC}\n"
 
 # Verify dependencies
@@ -81,9 +88,9 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     echo -e "${GREEN}✓${NC} Symlinks created in ~/bin"
 
     path_line='export PATH="$HOME/bin:$PATH"'
-    if [[ ":$PATH:" != *":$HOME/bin:"* ]] && ! grep -q "$path_line" ~/.bashrc 2>/dev/null; then
-        echo "$path_line" >> ~/.bashrc
-        echo -e "${GREEN}✓${NC} Added ~/bin to PATH in ~/.bashrc"
+    if [[ ":$PATH:" != *":$HOME/bin:"* ]] && ! grep -q "$path_line" "$RC_FILE" 2>/dev/null; then
+        echo "$path_line" >> "$RC_FILE"
+        echo -e "${GREEN}✓${NC} Added ~/bin to PATH in ${RC_FILE}"
     fi
 fi
 
@@ -173,11 +180,11 @@ read -p "Enable bash tab completion? [Y/n] " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     completion_line='source ~/bin/prs.d/completion.bash'
-    if ! grep -q "$completion_line" ~/.bashrc 2>/dev/null; then
-        echo "$completion_line" >> ~/.bashrc
-        echo -e "${GREEN}✓${NC} Completion added to ~/.bashrc"
+    if ! grep -q "$completion_line" "$RC_FILE" 2>/dev/null; then
+        echo "$completion_line" >> "$RC_FILE"
+        echo -e "${GREEN}✓${NC} Completion added to ${RC_FILE}"
     else
-        echo -e "${GREEN}✓${NC} Completion already in ~/.bashrc"
+        echo -e "${GREEN}✓${NC} Completion already in ${RC_FILE}"
     fi
 fi
 

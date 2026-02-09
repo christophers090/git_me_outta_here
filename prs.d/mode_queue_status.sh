@@ -5,7 +5,7 @@ _fetch_queue() {
     gh api graphql -f query='
 {
   repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
-    mergeQueue(branch: "main") {
+    mergeQueue(branch: "main") {  # TODO: detect default branch instead of hardcoding
       entries(first: 50) {
         nodes {
           enqueuedAt
@@ -118,5 +118,5 @@ _queue_is_empty() {
 run_queue_status() {
     local filter_topic="$1"
 
-    display_with_refresh "queue" "_fetch_queue" "_render_queue" "Fetching merge queue..." "" '_queue_is_empty "$data"'
+    display_with_refresh "queue" "_fetch_queue" "_render_queue" "Fetching merge queue..." "" "_queue_is_empty"
 }

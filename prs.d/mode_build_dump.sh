@@ -7,20 +7,14 @@ run_build_dump() {
     pr_basics
 
     # Get build URL and set up globals
-    BK_BUILD_URL=$(echo "$PR_JSON" | jq -r ".[0].statusCheckRollup[]? | select(.context == \"${CI_CHECK_CONTEXT}\") | .targetUrl // empty" 2>/dev/null | head -1)
+    extract_bk_build_url "$PR_JSON"
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1
     fi
 
-    # Get API token from bk config
     local bk_token
-    bk_token=$(grep 'api_token:' ~/.config/bk.yaml 2>/dev/null | head -1 | awk '{print $2}')
-
-    if [[ -z "$bk_token" ]]; then
-        echo -e "${RED}Could not find Buildkite API token in ~/.config/bk.yaml${NC}"
-        return 1
-    fi
+    bk_token=$(bk_get_token) || return 1
 
     # Find all failed jobs
     local failed_jobs

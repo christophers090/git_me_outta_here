@@ -26,15 +26,20 @@ _render_outstanding() {
     fi
 
     # Parse submodule PRs into lookup (topic -> "number|title|url|review_ok")
+    # Reads from cache (populated by background fetch) - never blocks on API calls
     declare -A sub_pr_data
     declare -a sub_all_topics=()
-    if [[ -n "$_OUTSTANDING_SUB_JSON" && "$_OUTSTANDING_SUB_JSON" != "[]" ]]; then
+    local _sub_json
+    _sub_json=$(cache_get "sub_outstanding")
+    if [[ -n "$_sub_json" && "$_sub_json" != "[]" ]]; then
         local sub_parsed
-        sub_parsed=$(parse_submodule_pr_map "$_OUTSTANDING_SUB_JSON")
+        sub_parsed=$(parse_submodule_pr_map "$_sub_json")
         while IFS='|' read -r s_topic s_number s_title s_url s_review_ok; do
             [[ -z "$s_topic" || "$s_topic" == "null" ]] && continue
+            if [[ -z "${sub_pr_data[$s_topic]:-}" ]]; then
+                sub_all_topics+=("$s_topic")
+            fi
             sub_pr_data["$s_topic"]="$s_number|$s_title|$s_url|$s_review_ok"
-            sub_all_topics+=("$s_topic")
         done <<< "$sub_parsed"
     fi
 
@@ -61,9 +66,11 @@ _render_outstanding() {
 
     while IFS='|' read -r number title url topic relative ci_status review_ok; do
         [[ -z "$topic" || "$topic" == "null" ]] && continue
+        if [[ -z "${pr_data[$topic]:-}" ]]; then
+            all_topics+=("$topic")
+        fi
         pr_data["$topic"]="$number|$title|$url|$ci_status|$review_ok"
         pr_relative["$topic"]="$relative"
-        all_topics+=("$topic")
 
         if [[ -n "$relative" && "$relative" != "main" ]]; then
             pr_children["$relative"]+="$topic "
@@ -93,26 +100,30 @@ _render_outstanding() {
         fi
     done
 
-    # Helper: Find root of chain containing topic
+    # Helper: Find root of chain containing topic (depth-limited to prevent cycles)
     _find_chain_root() {
         local topic="$1"
+        local depth="${2:-0}"
+        if [[ $depth -ge 20 ]]; then echo "$topic"; return; fi
         local relative="${pr_relative[$topic]:-}"
         if [[ -z "$relative" || "$relative" == "main" || -z "${pr_data[$relative]:-}" ]]; then
             echo "$topic"
         else
-            _find_chain_root "$relative"
+            _find_chain_root "$relative" $((depth + 1))
         fi
     }
 
     # Helper: Get chain order string (main <- topic <- child <- grandchild)
     _get_chain_order() {
         local topic="$1"
+        local depth="${2:-0}"
+        if [[ $depth -ge 20 ]]; then echo "$topic"; return; fi
         local result="$topic"
         local children="${pr_children[$topic]:-}"
         if [[ -n "$children" ]]; then
             local child_array=($children)
             for child in "${child_array[@]}"; do
-                result="$result <- $(_get_chain_order "$child")"
+                result="$result <- $(_get_chain_order "$child" $((depth + 1)))"
             done
         fi
         echo "$result"
@@ -158,10 +169,12 @@ _render_outstanding() {
         fi
     }
 
-    # Helper: Print chain recursively
+    # Helper: Print chain recursively (depth-limited to prevent cycles)
     _print_chain() {
         local topic="$1"
         local prefix="$2"
+        local depth="${3:-0}"
+        if [[ $depth -ge 20 ]]; then return; fi
 
         _print_pr "$topic" "$prefix"
         echo ""
@@ -170,7 +183,7 @@ _render_outstanding() {
         if [[ -n "$children" ]]; then
             local child_array=($children)
             for child in "${child_array[@]}"; do
-                _print_chain "$child" "$prefix"
+                _print_chain "$child" "$prefix" $((depth + 1))
             done
         fi
     }
@@ -280,7 +293,6 @@ _render_outstanding() {
 # Global state for rendering (set by run_outstanding, used by wrapper functions)
 _OUTSTANDING_FILTER_TOPIC=""
 _OUTSTANDING_FILTER_TOPICS_STR=""
-_OUTSTANDING_SUB_JSON=""
 
 # Render wrapper that uses global filter state
 _outstanding_render() {
@@ -290,7 +302,9 @@ _outstanding_render() {
 # Post-cache hook: update completion cache and prefetch PR data
 _outstanding_post_cache() {
     local fresh_json="$1"
-    update_completion_cache "$fresh_json" "$_OUTSTANDING_SUB_JSON"
+    local sub_json
+    sub_json=$(cache_get "sub_outstanding")
+    update_completion_cache "$fresh_json" "$sub_json"
     # Prefetch status in background (only if interactive)
     if is_interactive; then
         prefetch_all_pr_data "$fresh_json" &
@@ -322,13 +336,16 @@ run_outstanding() {
         filter_topic=""  # Clear so we use filter_topics array instead
     fi
 
-    # Fetch submodule PRs fresh every time (still cache for status mode)
-    _OUTSTANDING_SUB_JSON=""
+    # Fetch submodule PRs in background (non-blocking) - render reads from cache
     if [[ -n "$SUBMODULE_REPO" && "$SUBMODULE_MODE" != "true" ]]; then
-        _OUTSTANDING_SUB_JSON=$(fetch_submodule_prs)
-        if [[ -n "$_OUTSTANDING_SUB_JSON" && "$_OUTSTANDING_SUB_JSON" != "[]" ]]; then
-            cache_set "sub_outstanding" "$_OUTSTANDING_SUB_JSON"
-        fi
+        (
+            local sub_json
+            sub_json=$(fetch_submodule_prs)
+            if [[ -n "$sub_json" && "$sub_json" != "[]" ]]; then
+                cache_set "sub_outstanding" "$sub_json"
+            fi
+        ) &>/dev/null &
+        disown
     fi
 
     # Set global state for render wrapper
