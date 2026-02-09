@@ -104,7 +104,7 @@ fi
 default_gh_user=$(gh api user -q .login 2>/dev/null || echo "")
 
 # Get Buildkite org slug from bk if possible
-default_bk_org=$(bk whoami 2>/dev/null | grep -oP 'Organization:\s*\K\S+' || echo "")
+default_bk_org=$(bk whoami 2>/dev/null | jq -r '.organization_slug // empty' 2>/dev/null || echo "")
 
 if [[ -n "$default_gh_user" ]]; then
     read -p "GitHub username: $default_gh_user - correct? [Y/n] " -n 1 -r
