@@ -112,27 +112,6 @@ fetch_with_spinner() {
     fi
 }
 
-# Count visual terminal lines (accounts for line wrapping from long lines)
-# Uses terminal width to calculate how many screen rows text actually occupies.
-_count_visual_lines() {
-    local text="$1"
-    local cols
-    cols=$(tput cols 2>/dev/null || echo 80)
-    # Strip all ANSI codes in one sed pass (instead of per-line fork)
-    local stripped
-    stripped=$(printf '%s' "$text" | sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g; s/\x1b\\]8;;[^\x07]*\x07//g')
-    local total=0
-    while IFS= read -r line; do
-        local len=${#line}
-        if [[ $len -le $cols ]]; then
-            total=$((total + 1))
-        else
-            total=$((total + (len + cols - 1) / cols))
-        fi
-    done <<< "$stripped"
-    echo "$total"
-}
-
 # Hook globals for display_with_refresh customization
 # Set these before calling display_with_refresh(), reset to "" after
 DISPLAY_EARLY_EXIT_FN=""    # Called first; return 0 to exit early (e.g., yank mode)
@@ -184,55 +163,22 @@ display_with_refresh() {
     }
 
     if [[ -n "$cached_data" ]] && [[ -z "${NO_CACHE:-}" ]] && is_interactive; then
-        # Have cache - show it immediately, then refresh in background
-        local cached_output
-        cached_output=$("$render_fn" "$cached_data")
+        # Have cache - show it immediately, refresh in background for next run
+        "$render_fn" "$cached_data"
+        DISPLAY_REFRESH_DATA="$cached_data"
 
-        # Count visual lines (accounts for terminal line wrapping)
-        local cached_lines
-        cached_lines=$(_count_visual_lines "$cached_output")
-
-        # Print cached output + loading indicator
-        echo "$cached_output"
-        echo -e "${DIM}⟳ Refreshing...${NC}"
-
-        # Fetch fresh data
-        fresh_data=$("$fetch_fn")
-
-        if ! _is_empty "$fresh_data"; then
-            cache_set "$cache_key" "$fresh_data"
-
-            # Run post-cache function if provided
-            if [[ -n "$post_cache_fn" ]]; then
-                "$post_cache_fn" "$fresh_data"
+        # Refresh cache in background (detached) for next invocation
+        (
+            local fresh_data
+            fresh_data=$("$fetch_fn")
+            if ! _is_empty "$fresh_data"; then
+                cache_set "$cache_key" "$fresh_data"
+                if [[ -n "$post_cache_fn" ]]; then
+                    "$post_cache_fn" "$fresh_data"
+                fi
             fi
-
-            local fresh_output
-            fresh_output=$("$render_fn" "$fresh_data")
-
-            # Move cursor up by (cached_lines + 1 for refreshing line), then clear to end
-            local lines_to_clear=$((cached_lines + 1))
-            tput cuu "$lines_to_clear" 2>/dev/null || true
-            tput ed 2>/dev/null || true
-
-            # Print fresh output
-            echo "$fresh_output"
-
-            # Show status
-            if [[ "$cached_output" != "$fresh_output" ]]; then
-                echo -e "${DIM}↻ Updated${NC}"
-            else
-                echo -e "${DIM}✓ Up to date${NC}"
-            fi
-
-            DISPLAY_REFRESH_DATA="$fresh_data"
-        else
-            # API failed - just remove the refreshing indicator
-            tput cuu 1 2>/dev/null || true
-            tput ed 2>/dev/null || true
-            echo -e "${DIM}✓ (cached)${NC}"
-            DISPLAY_REFRESH_DATA="$cached_data"
-        fi
+        ) &>/dev/null &
+        disown
     else
         # No cache - fetch with spinner
         if is_interactive; then

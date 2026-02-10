@@ -1,22 +1,41 @@
 # prs build_steps mode - show build steps status
 # shellcheck shell=bash
 
-run_build_steps() {
-    local topic="$1"
-    get_build_pr_or_fail "$topic" "build_steps" || return 1
+# Render build steps from BK build JSON (single jq call, no per-job forks)
+_render_build_steps_table() {
+    local build_json="$1"
+    local topic="$2"
 
-    if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
-        return 1
-    fi
+    local now_epoch
+    now_epoch=$(date +%s)
 
-    echo -e "${BOLD}${BLUE}PR #${PR_NUMBER}:${NC} ${PR_TITLE}"
-    echo -e "${DIM}Build #${BK_BUILD_NUMBER}${NC}"
-    echo ""
+    # Extract build state + all job data in ONE jq call
+    local extracted
+    extracted=$(echo "$build_json" | jq -r --argjson now "$now_epoch" '
+        .state,
+        (.jobs[] | select(.type == "script") |
+            # Strip :emoji: codes and trim whitespace
+            ((.name // "unknown") | gsub(":[a-z_-]+:"; "") | gsub("^\\s+|\\s+$"; "")) as $name |
+            (if $name == "" then "(pipeline)" else $name end) as $clean_name |
+            (.state // "unknown") as $state |
+            # Strip fractional seconds (.123Z -> Z) for fromdateiso8601
+            (def parse_ts: gsub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+            if .finished_at and .started_at then
+                ((.finished_at | parse_ts) - (.started_at | parse_ts)) | tostring
+            elif .started_at then
+                (($now - (.started_at | parse_ts)) | tostring) + " running"
+            else
+                "queued"
+            end) as $duration |
+            "\($clean_name)\t\($state)\t\($duration)"
+        )
+    ')
 
-    # Show build overall status
-    local build_state state_color
-    build_state=$(echo "$BK_BUILD_JSON" | jq -r '.state')
+    # Read build state (first line)
+    local build_state
+    read -r build_state <<< "$extracted"
 
+    local state_color
     case "$build_state" in
         passed) state_color="${GREEN}" ;;
         failed|canceled) state_color="${RED}" ;;
@@ -26,46 +45,31 @@ run_build_steps() {
     echo -e "Build Status: ${state_color}${build_state}${NC}"
     echo ""
 
-    # Format: # | Job | Status | Time
     local max_name_len=30
 
-    # Print header
     printf "${BOLD}%3s │ %-${max_name_len}s │ %-14s │ %s${NC}\n" "#" "Job" "Status" "Time"
     printf "%.0s─" $(seq 1 3); printf "─┼─"; printf "%.0s─" $(seq 1 $max_name_len); printf "─┼─"; printf "%.0s─" $(seq 1 14); printf "─┼─"; printf "%.0s─" $(seq 1 12); echo ""
 
-    # Process each job
-    local job_num=0
-    while read -r job; do
+    # Read job lines (tab-separated: name, state, duration)
+    local job_num=0 name state duration_str
+    while IFS=$'\t' read -r name state duration_str; do
+        [[ -z "$name" ]] && continue
         job_num=$((job_num + 1))
-        local name state started_at finished_at
-
-        name=$(strip_emoji "$(echo "$job" | jq -r '.name // "unknown"')")
-        [[ -z "$name" ]] && name="(pipeline)"
-        state=$(echo "$job" | jq -r '.state // "unknown"')
-        started_at=$(echo "$job" | jq -r '.started_at // empty')
-        finished_at=$(echo "$job" | jq -r '.finished_at // empty')
 
         # Truncate name if too long
         if [[ ${#name} -gt $max_name_len ]]; then
             name="${name:0:$((max_name_len-3))}..."
         fi
 
-        # Calculate time
+        # Format duration
         local time_str
-        if [[ -n "$finished_at" && -n "$started_at" ]]; then
-            local start_epoch end_epoch duration_sec
-            start_epoch=$(date -d "$started_at" +%s 2>/dev/null || echo 0)
-            end_epoch=$(date -d "$finished_at" +%s 2>/dev/null || echo 0)
-            duration_sec=$((end_epoch - start_epoch))
-            time_str=$(format_duration "$duration_sec")
-        elif [[ -n "$started_at" ]]; then
-            local start_epoch now_epoch elapsed_sec
-            start_epoch=$(date -d "$started_at" +%s 2>/dev/null || echo 0)
-            now_epoch=$(date +%s)
-            elapsed_sec=$((now_epoch - start_epoch))
-            time_str="$(format_duration "$elapsed_sec") ▶"
-        else
+        if [[ "$duration_str" == "queued" ]]; then
             time_str="queued"
+        elif [[ "$duration_str" == *" running" ]]; then
+            local secs="${duration_str% running}"
+            time_str="$(format_duration "$secs") ▶"
+        else
+            time_str=$(format_duration "$duration_str")
         fi
 
         # Color status with proper padding
@@ -83,9 +87,29 @@ run_build_steps() {
         esac
 
         printf "%3d │ %-${max_name_len}s │ %b │ %s\n" "$job_num" "$name" "$status_colored" "$time_str"
-    done < <(echo "$BK_BUILD_JSON" | jq -c '.jobs[] | select(.type == "script")')
+    done < <(echo "$extracted" | tail -n +2)
 
     echo ""
     echo -e "${DIM}${BK_BUILD_URL}${NC}"
     echo -e "${DIM}Cancel a job: prs -bc ${topic} <#>${NC}"
+}
+
+run_build_steps() {
+    local topic="$1"
+
+    # Phase 1: PR lookup - fast from cache (status/outstanding), shows header immediately
+    get_build_pr_or_fail "$topic" "build_steps" || return 1
+
+    echo -e "${BOLD}${BLUE}PR #${PR_NUMBER}:${NC} ${PR_TITLE}"
+
+    # Phase 2: BK build fetch - always fresh (volatile data)
+    if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
+        return 1
+    fi
+
+    echo -e "${DIM}Build #${BK_BUILD_NUMBER}${NC}"
+    echo ""
+
+    # Phase 3: Render build steps table
+    _render_build_steps_table "$BK_BUILD_JSON" "$topic"
 }
