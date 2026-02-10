@@ -42,10 +42,7 @@ run_build_console() {
         return 1
     fi
 
-    get_pr_or_fail "$topic" "build_console" "all" "number,title,statusCheckRollup" || return 1
-    pr_basics
-
-    extract_bk_build_url "$PR_JSON"
+    get_build_pr_or_fail "$topic" "build_console" || return 1
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1

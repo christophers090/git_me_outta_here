@@ -3,11 +3,7 @@
 
 run_build_dump() {
     local topic="$1"
-    get_pr_or_fail "$topic" "build_dump" "all" "number,title,statusCheckRollup" || return 1
-    pr_basics
-
-    # Get build URL and set up globals
-    extract_bk_build_url "$PR_JSON"
+    get_build_pr_or_fail "$topic" "build_dump" || return 1
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1

@@ -19,6 +19,63 @@ bk_get_token() {
     echo "$token"
 }
 
+# Two-phase PR lookup for build modes - find PR number cheaply, then fetch heavy fields for one PR
+# Sets globals: PR_JSON, PR_NUMBER, PR_TITLE, BK_BUILD_URL
+# Returns 1 if not found
+get_build_pr_or_fail() {
+    local topic="$1"
+    local mode="$2"
+
+    require_topic "$mode" "$topic" || return 1
+
+    local pr_number=""
+
+    # Phase 1: Find PR number cheaply
+    if [[ "$topic" =~ ^[0-9]+$ ]]; then
+        pr_number="$topic"
+    else
+        # Try outstanding cache first (no API call)
+        local outstanding
+        outstanding=$(cache_get "outstanding")
+        if [[ -n "$outstanding" && "$outstanding" != "[]" ]]; then
+            pr_number=$(echo "$outstanding" | jq -r --arg topic "$topic" '
+                ($topic | gsub("(?<c>[.+*?^${}()|\\[\\]])"; "\\\(.c)")) as $escaped |
+                [.[] | select(
+                    (.headRefName | endswith("/" + $topic)) or
+                    (.body | test("Topic:\\s*" + $escaped + "\\b"))
+                )] | .[0].number // empty' 2>/dev/null)
+        fi
+
+        # Fall back to lightweight API lookup (just number, no heavy fields)
+        if [[ -z "$pr_number" ]]; then
+            local lookup
+            lookup=$(find_pr "$topic" "all" "number")
+            pr_number=$(echo "$lookup" | jq -r '.[0].number // empty' 2>/dev/null)
+        fi
+    fi
+
+    if [[ -z "$pr_number" ]]; then
+        pr_not_found "$topic"
+        return 1
+    fi
+
+    # Phase 2: Fetch heavy fields for just this one PR
+    local result
+    result=$(gh pr view "$pr_number" -R "$REPO" --json number,title,statusCheckRollup 2>/dev/null)
+
+    if [[ -z "$result" ]]; then
+        pr_not_found "$topic"
+        return 1
+    fi
+
+    PR_JSON="[$result]"
+    PR_NUMBER=$(echo "$result" | jq -r '.number')
+    PR_TITLE=$(echo "$result" | jq -r '.title')
+    extract_bk_build_url "$PR_JSON"
+
+    return 0
+}
+
 # Get build info for a topic. Sets globals: BK_BUILD_NUMBER, BK_BUILD_JSON, BK_BUILD_URL
 # Returns 1 if no build found
 # Usage: get_build_for_topic <topic> [pr_number] [pr_title]
@@ -27,19 +84,22 @@ get_build_for_topic() {
     local number="$2"
     local title="$3"
 
-    # If PR info not provided, look it up
+    # If PR info not provided, look it up using two-phase fetch
     if [[ -z "$number" ]]; then
-        local pr_json
-        pr_json=$(cached_find_pr "$topic" "all" "number,title,statusCheckRollup")
-
-        if ! pr_exists "$pr_json"; then
-            pr_not_found "$topic"
+        if ! get_build_pr_or_fail "$topic" "build"; then
             return 1
         fi
+        number="$PR_NUMBER"
+        title="$PR_TITLE"
+    fi
 
-        number=$(pr_field "$pr_json" "number")
-        title=$(pr_field "$pr_json" "title")
-        extract_bk_build_url "$pr_json"
+    # If BK_BUILD_URL not set, fetch statusCheckRollup for just this PR
+    if [[ -z "${BK_BUILD_URL:-}" && -n "$number" ]]; then
+        local scr_json
+        scr_json=$(gh pr view "$number" -R "$REPO" --json statusCheckRollup 2>/dev/null)
+        if [[ -n "$scr_json" ]]; then
+            extract_bk_build_url "[$scr_json]"
+        fi
     fi
 
     if [[ -z "$BK_BUILD_URL" ]]; then

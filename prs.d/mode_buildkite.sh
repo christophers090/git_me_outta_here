@@ -3,10 +3,7 @@
 
 run_buildkite() {
     local topic="$1"
-    get_pr_or_fail "$topic" "buildkite" "all" "number,title,statusCheckRollup" || return 1
-    pr_basics
-
-    extract_bk_build_url "$PR_JSON"
+    get_build_pr_or_fail "$topic" "buildkite" || return 1
     local buildkite_url="$BK_BUILD_URL"
 
     if [[ -z "$buildkite_url" ]]; then

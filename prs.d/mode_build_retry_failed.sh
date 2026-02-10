@@ -3,10 +3,7 @@
 
 run_build_retry_failed() {
     local topic="$1"
-    get_pr_or_fail "$topic" "build_retry_failed" "all" "number,title,statusCheckRollup" || return 1
-    pr_basics
-
-    extract_bk_build_url "$PR_JSON"
+    get_build_pr_or_fail "$topic" "build_retry_failed" || return 1
 
     if ! get_build_for_topic "$topic" "$PR_NUMBER" "$PR_TITLE"; then
         return 1
