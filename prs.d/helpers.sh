@@ -136,7 +136,7 @@ pr_basics() {
 get_branch_topics() {
     local base_ref="origin/main"
     git rev-parse --verify "$base_ref" &>/dev/null || base_ref="main"
-    git log --oneline --format="%s" "${base_ref}..HEAD" 2>/dev/null \
+    git log --format="%B" "${base_ref}..HEAD" 2>/dev/null \
         | grep -oP 'Topic:\s*\K\S+' | sort -u
 }
 

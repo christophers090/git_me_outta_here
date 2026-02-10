@@ -20,6 +20,7 @@ bk_get_token() {
 }
 
 # Two-phase PR lookup for build modes - find PR number cheaply, then fetch heavy fields for one PR
+# Tries caches first (status_{topic}, outstanding) to avoid API calls entirely on warm cache.
 # Sets globals: PR_JSON, PR_NUMBER, PR_TITLE, BK_BUILD_URL
 # Returns 1 if not found
 get_build_pr_or_fail() {
@@ -28,23 +29,63 @@ get_build_pr_or_fail() {
 
     require_topic "$mode" "$topic" || return 1
 
-    local pr_number=""
+    # Fast path 1: status_{topic} cache (set by prs <topic> or prefetch)
+    # Contains number, title, statusCheckRollup — everything we need
+    if [[ ! "$topic" =~ ^[0-9]+$ ]]; then
+        local status_cached
+        status_cached=$(cache_get "status_${topic}")
+        if [[ -n "$status_cached" && "$status_cached" != "[]" ]]; then
+            local has_scr
+            has_scr=$(echo "$status_cached" | jq -r '.[0].statusCheckRollup // empty' 2>/dev/null)
+            if [[ -n "$has_scr" ]]; then
+                PR_JSON="$status_cached"
+                PR_NUMBER=$(echo "$status_cached" | jq -r '.[0].number')
+                PR_TITLE=$(echo "$status_cached" | jq -r '.[0].title')
+                extract_bk_build_url "$PR_JSON"
+                return 0
+            fi
+        fi
+    fi
 
-    # Phase 1: Find PR number cheaply
-    if [[ "$topic" =~ ^[0-9]+$ ]]; then
-        pr_number="$topic"
-    else
-        # Try outstanding cache first (no API call)
-        local outstanding
+    # Fast path 2: outstanding cache — extract matching PR by topic
+    # Contains number, title, statusCheckRollup per PR
+    # Also used by slow path for PR number if statusCheckRollup missing
+    local outstanding=""
+    if [[ ! "$topic" =~ ^[0-9]+$ ]]; then
         outstanding=$(cache_get "outstanding")
         if [[ -n "$outstanding" && "$outstanding" != "[]" ]]; then
-            pr_number=$(echo "$outstanding" | jq -r --arg topic "$topic" '
+            local matched
+            matched=$(echo "$outstanding" | jq -c --arg topic "$topic" '
                 ($topic | gsub("(?<c>[.+*?^${}()|\\[\\]])"; "\\\(.c)")) as $escaped |
                 [.[] | select(
                     (.headRefName | endswith("/" + $topic)) or
                     (.body | test("Topic:\\s*" + $escaped + "\\b"))
-                )] | .[0].number // empty' 2>/dev/null)
+                )] | .[0] // empty' 2>/dev/null)
+            if [[ -n "$matched" && "$matched" != "null" ]]; then
+                local has_scr
+                has_scr=$(echo "$matched" | jq -r '.statusCheckRollup // empty' 2>/dev/null)
+                if [[ -n "$has_scr" ]]; then
+                    PR_JSON=$(echo "$matched" | jq '[{number, title, statusCheckRollup}]')
+                    PR_NUMBER=$(echo "$matched" | jq -r '.number')
+                    PR_TITLE=$(echo "$matched" | jq -r '.title')
+                    extract_bk_build_url "$PR_JSON"
+                    return 0
+                fi
+                # Matched but no statusCheckRollup — extract PR number for slow path
+                local matched_number
+                matched_number=$(echo "$matched" | jq -r '.number // empty' 2>/dev/null)
+            fi
         fi
+    fi
+
+    # Slow path: API calls (both caches missed — cold start, closed PRs, numeric topic, etc.)
+    local pr_number=""
+
+    if [[ "$topic" =~ ^[0-9]+$ ]]; then
+        pr_number="$topic"
+    else
+        # Use PR number from outstanding match above if available
+        pr_number="${matched_number:-}"
 
         # Fall back to lightweight API lookup (just number, no heavy fields)
         if [[ -z "$pr_number" ]]; then
@@ -59,7 +100,7 @@ get_build_pr_or_fail() {
         return 1
     fi
 
-    # Phase 2: Fetch heavy fields for just this one PR
+    # Fetch heavy fields for just this one PR
     local result
     result=$(gh pr view "$pr_number" -R "$REPO" --json number,title,statusCheckRollup 2>/dev/null)
 
@@ -93,16 +134,7 @@ get_build_for_topic() {
         title="$PR_TITLE"
     fi
 
-    # If BK_BUILD_URL not set, fetch statusCheckRollup for just this PR
-    if [[ -z "${BK_BUILD_URL:-}" && -n "$number" ]]; then
-        local scr_json
-        scr_json=$(gh pr view "$number" -R "$REPO" --json statusCheckRollup 2>/dev/null)
-        if [[ -n "$scr_json" ]]; then
-            extract_bk_build_url "[$scr_json]"
-        fi
-    fi
-
-    if [[ -z "$BK_BUILD_URL" ]]; then
+    if [[ -z "${BK_BUILD_URL:-}" ]]; then
         echo -e "${RED}No Buildkite build found for PR #${number}:${NC} ${title}"
         return 1
     fi
