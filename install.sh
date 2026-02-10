@@ -58,13 +58,24 @@ fi
 echo -e "${GREEN}✓${NC} GitHub CLI authenticated"
 
 if ! bk whoami &>/dev/null; then
-    echo -e "${RED}✗${NC} Buildkite CLI not authenticated. Run: bk configure"
     echo ""
-    echo "  You'll need an API token from:"
-    echo "  https://buildkite.com/user/api-access-tokens"
+    echo -e "${RED}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║${NC}  ${BOLD}Buildkite CLI not authenticated${NC}                                ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  Run this command:                                               ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}      ${BOLD}bk configure${NC}                                               ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  You'll need an API token from:                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  ${BOLD}https://buildkite.com/user/api-access-tokens${NC}                   ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  1. Required scopes:                                             ${RED}║${NC}"
+    echo -e "${RED}║${NC}     read_artifacts, read_builds, write_builds,                   ${RED}║${NC}"
+    echo -e "${RED}║${NC}     read_build_logs, read_pipelines, graphql                     ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  2. Organization Access: ${BOLD}MUST select your org!${NC}                   ${RED}║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "  1. Required scopes: read_artifacts, read_builds, write_builds, read_build_logs, read_pipelines, graphql"
-    echo "  2. Organization Access: MUST select your org!"
     exit 1
 fi
 echo -e "${GREEN}✓${NC} Buildkite CLI authenticated"
@@ -74,23 +85,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Setup symlinks and PATH
 echo ""
-read -p "Create symlinks in ~/bin and add to PATH? [Y/n] " -n 1 -r
+read -p "Create symlinks in ~/.local/bin and add to PATH? [Y/n] " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    mkdir -p ~/bin
+    mkdir -p ~/.local/bin
 
-    [[ -L ~/bin/prs ]] && rm ~/bin/prs
-    ln -s "$SCRIPT_DIR/prs" ~/bin/prs
+    [[ -L ~/.local/bin/prs ]] && rm ~/.local/bin/prs
+    ln -s "$SCRIPT_DIR/prs" ~/.local/bin/prs
 
-    [[ -L ~/bin/prs.d ]] && rm ~/bin/prs.d
-    ln -s "$SCRIPT_DIR/prs.d" ~/bin/prs.d
+    [[ -L ~/.local/bin/prs.d ]] && rm ~/.local/bin/prs.d
+    ln -s "$SCRIPT_DIR/prs.d" ~/.local/bin/prs.d
 
-    echo -e "${GREEN}✓${NC} Symlinks created in ~/bin"
+    echo -e "${GREEN}✓${NC} Symlinks created in ~/.local/bin"
 
-    path_line='export PATH="$HOME/bin:$PATH"'
-    if [[ ":$PATH:" != *":$HOME/bin:"* ]] && ! grep -q "$path_line" "$RC_FILE" 2>/dev/null; then
+    path_line='export PATH="$HOME/.local/bin:$PATH"'
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && ! grep -q "$path_line" "$RC_FILE" 2>/dev/null; then
         echo "$path_line" >> "$RC_FILE"
-        echo -e "${GREEN}✓${NC} Added ~/bin to PATH in ${RC_FILE}"
+        echo -e "${GREEN}✓${NC} Added ~/.local/bin to PATH in ${RC_FILE}"
     fi
 fi
 
@@ -179,7 +190,7 @@ echo ""
 read -p "Enable bash tab completion? [Y/n] " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    completion_line='source ~/bin/prs.d/completion.bash'
+    completion_line='source ~/.local/bin/prs.d/completion.bash'
     if ! grep -q "$completion_line" "$RC_FILE" 2>/dev/null; then
         echo "$completion_line" >> "$RC_FILE"
         echo -e "${GREEN}✓${NC} Completion added to ${RC_FILE}"
