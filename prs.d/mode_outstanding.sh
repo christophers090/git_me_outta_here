@@ -193,7 +193,7 @@ _render_outstanding() {
         echo -e "${BOLD}Topics in current branch:${NC} ${filter_topics[*]}"
         echo ""
 
-        declare -A shown_roots
+        declare -A shown_roots shown_missing
         for topic in "${filter_topics[@]}"; do
             if [[ -n "${pr_data[$topic]:-}" ]]; then
                 local root
@@ -206,11 +206,37 @@ _render_outstanding() {
                     echo -e "${DIM}main <- ${chain_order}${NC}"
                     echo -e "${BOLD}────────────────────────────────────────────────────────${NC}"
                     echo ""
+                    # If root's relative is a missing topic, show "likely merged" after the chain header
+                    local root_rel="${pr_relative[$root]:-}"
+                    if [[ -n "$root_rel" && "$root_rel" != "main" && -z "${pr_data[$root_rel]:-}" ]]; then
+                        if [[ -z "${shown_missing[$root_rel]:-}" ]]; then
+                            shown_missing[$root_rel]=1
+                            if git branch -r --list "*/revup/*/$root_rel" 2>/dev/null | grep -q .; then
+                                echo -e "  ${YELLOW}Topic not found as open PR:${NC} $root_rel"
+                            else
+                                echo -e "  ${DIM}Topic not found as open PR, likely merged:${NC} $root_rel"
+                            fi
+                            echo ""
+                        fi
+                    fi
                     _print_chain "$root" "  "
                     echo ""
                 fi
             else
+                # Defer standalone missing topics to print after all chains
+                :
+            fi
+        done
+
+        # Print missing topics that weren't shown inline with a chain
+        for topic in "${filter_topics[@]}"; do
+            [[ -n "${pr_data[$topic]:-}" ]] && continue
+            [[ -n "${shown_missing[$topic]:-}" ]] && continue
+            # Check if remote branch was deleted (likely merged) - local ref check only
+            if git branch -r --list "*/revup/*/$topic" 2>/dev/null | grep -q .; then
                 echo -e "${YELLOW}Topic not found as open PR:${NC} $topic"
+            else
+                echo -e "${DIM}Topic not found as open PR, likely merged:${NC} $topic"
             fi
         done
         return 0
